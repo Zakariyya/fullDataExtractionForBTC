@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BTC 回测数据工作台</title>
+  <style>
+    :root {
+      --bg-0: #f4f7fb;
+      --bg-1: #e9f0ff;
+      --card: #ffffff;
+      --line: #d6deee;
+      --text: #1f2937;
+      --muted: #5a6b86;
+      --primary: #0f766e;
+      --primary-2: #0b5e58;
+      --shadow: 0 10px 30px rgba(23, 42, 90, 0.08);
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 0% 0%, rgba(15, 118, 110, 0.16), transparent 34%),
+        radial-gradient(circle at 100% 100%, rgba(15, 118, 110, 0.12), transparent 32%),
+        linear-gradient(165deg, var(--bg-0), var(--bg-1));
+      font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    .container { max-width: 1380px; margin: 0 auto; }
+    .header {
+      padding: 20px; border: 1px solid var(--line); border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.75); box-shadow: var(--shadow); margin-bottom: 16px;
+    }
+    .header h1 { margin: 0; font-size: 28px; }
+    .sub { margin-top: 8px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 520px) minmax(360px, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .card {
+      border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
+      box-shadow: var(--shadow); padding: 16px; margin-bottom: 16px;
+    }
+    .card h2 { margin: 0 0 12px; font-size: 18px; }
+    .grid { display: grid; grid-template-columns: 130px 1fr; gap: 8px 10px; align-items: center; }
+    label { color: var(--muted); font-size: 13px; font-weight: 600; }
+    input, select {
+      width: 100%; border: 1px solid var(--line); border-radius: 10px;
+      padding: 10px; font-size: 14px; color: var(--text); background: #fff;
+    }
+    .actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+    button {
+      border: none; border-radius: 10px; padding: 9px 14px; font-weight: 700; cursor: pointer;
+      transition: transform 140ms ease, filter 140ms ease;
+    }
+    button:hover { filter: brightness(0.97); transform: translateY(-1px); }
+    .btn-primary { color: #fff; background: linear-gradient(135deg, var(--primary), var(--primary-2)); }
+    .btn-ghost { color: #1f4069; background: #ebf2ff; border: 1px solid #d2deef; }
+
+    .logbox {
+      background: #0f172a; color: #d1fae5; border-radius: 10px; padding: 10px;
+      min-height: 220px; max-height: 320px; overflow: auto; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 12px; line-height: 1.5;
+    }
+    .meta { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+
+    .json {
+      border: 1px solid #d7dfef; border-radius: 10px; padding: 10px; background: #f9fbff;
+      max-height: 280px; overflow: auto; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 12px; line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border-bottom: 1px solid #e6ebf5; text-align: left; padding: 8px; }
+    th { color: #38506e; background: #f5f8ff; position: sticky; top: 0; }
+    .table-wrap { max-height: 380px; overflow: auto; border: 1px solid #d7dfef; border-radius: 10px; }
+
+    @media (max-width: 1100px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="header">
+      <h1>BTC 回测数据工作台</h1>
+      <div class="sub">双栏均衡：左侧负责下载任务，右侧负责质量检查与数据预览。面向 OKX 永续合约分钟级研究数据。</div>
+    </section>
+
+    <section class="layout">
+      <div>
+        <article class="card">
+          <h2>任务控制</h2>
+          <div class="grid">
+            <label for="instrument">交易对</label>
+            <input id="instrument" value="BTC-USDT-SWAP">
+
+            <label for="start">开始时间 (UTC)</label>
+            <input id="start" value="2026-04-01">
+
+            <label for="end">结束时间 (UTC)</label>
+            <input id="end" value="2026-04-02">
+
+            <label for="datasets">数据集</label>
+            <input id="datasets" value="candles,mark,index,funding">
+
+            <label for="outputSubdir">输出目录</label>
+            <input id="outputSubdir" value="data">
+          </div>
+          <div class="actions">
+            <button class="btn-primary" id="startBtn">启动下载</button>
+            <button class="btn-ghost" id="refreshTasksBtn">刷新任务列表</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>任务状态</h2>
+          <div class="meta" id="taskMeta">当前无任务</div>
+          <div class="json" id="taskJson">{}</div>
+        </article>
+
+        <article class="card">
+          <h2>进度日志 (SSE)</h2>
+          <div class="logbox" id="logBox"></div>
+        </article>
+      </div>
+
+      <div>
+        <article class="card">
+          <h2>数据质量摘要</h2>
+          <div class="actions">
+            <button class="btn-ghost" id="refreshSummaryBtn">刷新摘要</button>
+          </div>
+          <div class="json" id="summaryJson">{}</div>
+        </article>
+
+        <article class="card">
+          <h2>数据预览</h2>
+          <div class="grid">
+            <label for="previewDataset">数据集路径</label>
+            <select id="previewDataset">
+              <option value="candles">candles</option>
+              <option value="mark_price_candles">mark_price_candles</option>
+              <option value="index_candles">index_candles</option>
+              <option value="funding_rates">funding_rates</option>
+            </select>
+            <label for="previewLimit">行数</label>
+            <input id="previewLimit" value="30">
+          </div>
+          <div class="actions">
+            <button class="btn-ghost" id="previewBtn">加载预览</button>
+          </div>
+          <div class="table-wrap">
+            <table id="previewTable">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </article>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const api = {
+      startDownload: "/api/tasks/download",
+      listTasks: "/api/tasks",
+      summary: "/api/data/summary",
+      preview: "/api/data/preview",
+    };
+
+    let currentTaskId = null;
+    let currentEventSource = null;
+
+    function appendLog(line) {
+      const box = document.getElementById("logBox");
+      const now = new Date().toISOString();
+      box.textContent += `[${now}] ${line}\n`;
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function startDownload() {
+      const payload = {
+        start: document.getElementById("start").value.trim(),
+        end: document.getElementById("end").value.trim(),
+        instrument_id: document.getElementById("instrument").value.trim(),
+        datasets: document.getElementById("datasets").value.split(",").map(x => x.trim()).filter(Boolean),
+        output_subdir: document.getElementById("outputSubdir").value.trim(),
+        bar: "1m",
+      };
+      const resp = await fetch(api.startDownload, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) throw new Error("启动任务失败");
+      const data = await resp.json();
+      const task = data.task;
+      currentTaskId = task.task_id;
+      document.getElementById("taskMeta").textContent = `当前任务: ${currentTaskId}`;
+      document.getElementById("taskJson").textContent = JSON.stringify(task, null, 2);
+      appendLog(`任务已创建: ${currentTaskId}`);
+      connectEvents(currentTaskId);
+      await refreshSummary();
+    }
+
+    async function refreshTasks() {
+      const resp = await fetch(api.listTasks);
+      const data = await resp.json();
+      if (!data.tasks.length) return;
+      const task = data.tasks[0];
+      currentTaskId = task.task_id;
+      document.getElementById("taskMeta").textContent = `最近任务: ${task.task_id} (${task.status})`;
+      document.getElementById("taskJson").textContent = JSON.stringify(task, null, 2);
+    }
+
+    function connectEvents(taskId) {
+      if (currentEventSource) currentEventSource.close();
+      currentEventSource = new EventSource(`/api/tasks/${taskId}/events`);
+      currentEventSource.onmessage = (event) => {
+        const payload = JSON.parse(event.data);
+        if (payload.type === "heartbeat") return;
+        appendLog(JSON.stringify(payload));
+        refreshTasks().catch((err) => appendLog(`刷新任务失败: ${err.message}`));
+      };
+      currentEventSource.onerror = () => {
+        appendLog("事件流断开，5秒后可手动刷新任务状态。");
+      };
+    }
+
+    async function refreshSummary() {
+      const params = new URLSearchParams({
+        instrument_id: document.getElementById("instrument").value.trim(),
+        output_subdir: document.getElementById("outputSubdir").value.trim(),
+      });
+      const resp = await fetch(`${api.summary}?${params.toString()}`);
+      const data = await resp.json();
+      document.getElementById("summaryJson").textContent = JSON.stringify(data.summary, null, 2);
+    }
+
+    async function loadPreview() {
+      const params = new URLSearchParams({
+        dataset: document.getElementById("previewDataset").value,
+        limit: document.getElementById("previewLimit").value.trim(),
+        instrument_id: document.getElementById("instrument").value.trim(),
+        output_subdir: document.getElementById("outputSubdir").value.trim(),
+      });
+      const resp = await fetch(`${api.preview}?${params.toString()}`);
+      const data = await resp.json();
+      renderTable(data.rows || []);
+    }
+
+    function renderTable(rows) {
+      const head = document.querySelector("#previewTable thead");
+      const body = document.querySelector("#previewTable tbody");
+      head.innerHTML = "";
+      body.innerHTML = "";
+      if (!rows.length) {
+        body.innerHTML = "<tr><td>无数据</td></tr>";
+        return;
+      }
+      const keys = Object.keys(rows[0]);
+      const headerRow = document.createElement("tr");
+      keys.forEach((key) => {
+        const th = document.createElement("th");
+        th.textContent = key;
+        headerRow.appendChild(th);
+      });
+      head.appendChild(headerRow);
+
+      rows.forEach((row) => {
+        const tr = document.createElement("tr");
+        keys.forEach((key) => {
+          const td = document.createElement("td");
+          td.textContent = row[key];
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+    }
+
+    document.getElementById("startBtn").addEventListener("click", () => {
+      startDownload().catch((err) => appendLog(`启动失败: ${err.message}`));
+    });
+    document.getElementById("refreshTasksBtn").addEventListener("click", () => {
+      refreshTasks().catch((err) => appendLog(`刷新任务失败: ${err.message}`));
+    });
+    document.getElementById("refreshSummaryBtn").addEventListener("click", () => {
+      refreshSummary().catch((err) => appendLog(`刷新摘要失败: ${err.message}`));
+    });
+    document.getElementById("previewBtn").addEventListener("click", () => {
+      loadPreview().catch((err) => appendLog(`预览失败: ${err.message}`));
+    });
+
+    refreshTasks().catch(() => {});
+    refreshSummary().catch(() => {});
+  </script>
+</body>
+</html>

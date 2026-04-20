@@ -1,0 +1,25 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local tooling/session artifacts
+.superpowers/
+.codex/
+.codex
+*.log
+
+# Local runtime/output data
+data/
+/tmp/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
