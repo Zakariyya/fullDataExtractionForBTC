@@ -6,8 +6,8 @@ import json
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Callable
@@ -130,6 +130,20 @@ class DownloadService:
                         end_ms=end_ms,
                         tz_name=input_tz,
                     ):
+                        day_key = _format_day_key(day_start_ms, tz_name=input_tz)
+                        day_total_minutes = _calc_total_minutes(day_start_ms, day_end_ms)
+                        self._emit(
+                            task,
+                            {
+                                "type": "dataset_day_started",
+                                "dataset": dataset,
+                                "day": day_key,
+                                "day_start_ms": day_start_ms,
+                                "day_end_ms": day_end_ms,
+                                "total_minutes": day_total_minutes,
+                            },
+                        )
+
                         if _is_local_day_continuous(
                             output_root=output,
                             instrument_id=instrument_id,
@@ -143,12 +157,38 @@ class DownloadService:
                                 {
                                     "type": "dataset_day_skipped",
                                     "dataset": dataset,
+                                    "day": day_key,
                                     "day_start_ms": day_start_ms,
                                     "day_end_ms": day_end_ms,
+                                    "total_minutes": day_total_minutes,
                                     "reason": "local_data_continuous",
                                 },
                             )
                             continue
+
+                        def _on_day_progress(payload: dict[str, Any], ds: str = dataset, day: str = day_key) -> None:
+                            processed_minutes = _calc_processed_minutes(
+                                oldest_in_page=payload.get("oldest_in_page"),
+                                day_start_ms=day_start_ms,
+                                day_end_ms=day_end_ms,
+                                total_minutes=day_total_minutes,
+                            )
+                            progress_pct = round((processed_minutes * 100.0) / day_total_minutes, 2) if day_total_minutes > 0 else 0.0
+                            self._emit(
+                                task,
+                                {
+                                    "type": "dataset_day_progress",
+                                    "dataset": ds,
+                                    "day": day,
+                                    "day_start_ms": day_start_ms,
+                                    "day_end_ms": day_end_ms,
+                                    "total_minutes": day_total_minutes,
+                                    "processed_minutes": processed_minutes,
+                                    "progress_pct": progress_pct,
+                                    **payload,
+                                },
+                            )
+
                         day_rows = collect_dataset_rows(
                             client=client,
                             dataset=dataset,
@@ -156,11 +196,20 @@ class DownloadService:
                             bar=bar,
                             start_ms=day_start_ms,
                             end_ms=day_end_ms,
-                            on_progress=lambda payload, ds=dataset: self._emit(
-                                task, {"type": "dataset_progress", "dataset": ds, **payload}
-                            ),
+                            on_progress=_on_day_progress,
                         )
                         rows.extend(day_rows)
+                        self._emit(
+                            task,
+                            {
+                                "type": "dataset_day_finished",
+                                "dataset": dataset,
+                                "day": day_key,
+                                "day_start_ms": day_start_ms,
+                                "day_end_ms": day_end_ms,
+                                "rows_downloaded": len(day_rows),
+                            },
+                        )
                 else:
                     rows = collect_dataset_rows(
                         client=client,
@@ -235,6 +284,27 @@ def _bar_to_ms(bar: str) -> int | None:
     if value.endswith("w"):
         return int(value[:-1]) * 7 * 24 * 60 * 60 * 1000
     return None
+
+
+def _calc_total_minutes(day_start_ms: int, day_end_ms: int) -> int:
+    if day_end_ms <= day_start_ms:
+        return 0
+    return max(1, (day_end_ms - day_start_ms + 60_000 - 1) // 60_000)
+
+
+def _calc_processed_minutes(oldest_in_page: Any, day_start_ms: int, day_end_ms: int, total_minutes: int) -> int:
+    if not isinstance(oldest_in_page, int):
+        return 0
+    clamped_oldest = min(max(oldest_in_page, day_start_ms), day_end_ms)
+    covered_ms = max(0, day_end_ms - clamped_oldest)
+    processed = (covered_ms + 60_000 - 1) // 60_000
+    return max(0, min(total_minutes, processed))
+
+
+def _format_day_key(day_start_ms: int, tz_name: str) -> str:
+    tz = ZoneInfo(tz_name)
+    day_dt = datetime.fromtimestamp(day_start_ms / 1000, tz=timezone.utc).astimezone(tz)
+    return day_dt.strftime("%Y-%m-%d")
 
 
 def _is_local_day_continuous(

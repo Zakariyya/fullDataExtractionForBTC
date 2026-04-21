@@ -70,8 +70,10 @@
 
     .logbox {
       background: #0f172a; color: #d1fae5; border-radius: 10px; padding: 10px;
-      min-height: 220px; max-height: 320px; overflow: auto; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      height: 280px; min-height: 280px; max-height: 280px; overflow: auto; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
       font-size: 12px; line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
     .meta { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
 
@@ -232,10 +234,6 @@
           <div class="json" id="taskJson">{}</div>
         </article>
 
-        <article class="card">
-          <h2>进度日志 (SSE)</h2>
-          <div class="logbox" id="logBox"></div>
-        </article>
       </div>
 
       <div>
@@ -246,7 +244,21 @@
           </div>
           <div class="json" id="summaryJson">{}</div>
         </article>
+
+        <article class="card">
+          <h2>数据覆盖日期看板</h2>
+          <div class="actions">
+            <button class="btn-ghost" id="refreshCoverageBtn">刷新看板</button>
+          </div>
+          <div class="meta" id="coverageMeta">等待加载...</div>
+          <div class="json" id="coverageJson">{}</div>
+        </article>
       </div>
+
+      <article class="card preview-full">
+        <h2>进度日志 (SSE)</h2>
+        <div class="logbox" id="logBox"></div>
+      </article>
 
       <article class="card preview-full">
         <h2>数据预览</h2>
@@ -313,6 +325,7 @@
       startDownload: "/api/tasks/download",
       listTasks: "/api/tasks",
       summary: "/api/data/summary",
+      coverage: "/api/data/coverage",
       preview: "/api/data/preview",
     };
 
@@ -330,6 +343,10 @@
       dragStartVisibleStart: 0,
       dragStartVisibleEnd: 0,
     };
+    const sseLogState = {
+      lines: [],
+      inlineByKey: new Map(),
+    };
 
     const windowSlider = document.getElementById("windowSlider");
     const windowSelection = document.getElementById("windowSelection");
@@ -339,11 +356,79 @@
     const crosshairTooltip = document.getElementById("crosshairTooltip");
     const yAxisLabel = document.getElementById("yAxisLabel");
 
-    function appendLog(line) {
+    function renderLogBox() {
       const box = document.getElementById("logBox");
-      const now = new Date().toISOString();
-      box.textContent += `[${now}] ${line}\n`;
+      const inlineLines = Array.from(sseLogState.inlineByKey.values());
+      box.textContent = [...sseLogState.lines, ...inlineLines].join("\n");
+      if (box.textContent) box.textContent += "\n";
       box.scrollTop = box.scrollHeight;
+    }
+
+    function appendLog(line) {
+      const now = new Date().toISOString();
+      sseLogState.lines.push(`[${now}] ${line}`);
+      if (sseLogState.lines.length > 1200) {
+        sseLogState.lines = sseLogState.lines.slice(-1200);
+      }
+      renderLogBox();
+    }
+
+    function upsertInlineLog(key, line) {
+      const now = new Date().toISOString();
+      sseLogState.inlineByKey.set(key, `[${now}] ${line}`);
+      renderLogBox();
+    }
+
+    function clearInlineLog(key) {
+      if (!sseLogState.inlineByKey.has(key)) return;
+      sseLogState.inlineByKey.delete(key);
+      renderLogBox();
+    }
+
+    function clearAllInlineLogs() {
+      if (!sseLogState.inlineByKey.size) return;
+      sseLogState.inlineByKey.clear();
+      renderLogBox();
+    }
+
+    function formatProgressLog(payload) {
+      const dataset = payload.dataset || "unknown";
+      const day = payload.day || "-";
+      const processed = Number(payload.processed_minutes || 0);
+      const total = Number(payload.total_minutes || 0);
+      const pct = Number(payload.progress_pct || 0).toFixed(2);
+      const rows = Number(payload.rows_collected || 0);
+      const page = Number(payload.page_count || 0);
+      return `[${dataset}] ${day} 下载中 ${processed}/${total} 分钟 (${pct}%) | page=${page} rows=${rows}`;
+    }
+
+    function handleSseLogPayload(payload) {
+      if (!payload || payload.type === "heartbeat") return;
+      const dataset = payload.dataset || "unknown";
+      const day = payload.day || "-";
+      const key = `${dataset}:${day}`;
+      if (payload.type === "dataset_day_started") {
+        appendLog(`[${dataset}] ${day} 开始下载 | 总分钟数=${payload.total_minutes || 0}`);
+        return;
+      }
+      if (payload.type === "dataset_day_progress") {
+        upsertInlineLog(key, formatProgressLog(payload));
+        return;
+      }
+      if (payload.type === "dataset_day_finished") {
+        clearInlineLog(key);
+        appendLog(`[${dataset}] ${day} 下载完成 | rows=${payload.rows_downloaded || 0}`);
+        return;
+      }
+      if (payload.type === "dataset_day_skipped") {
+        clearInlineLog(key);
+        appendLog(`[${dataset}] ${day} 本地时间连续，已存在，跳过下载`);
+        return;
+      }
+      if (payload.type === "task_completed" || payload.type === "task_failed" || payload.type === "stream_end" || payload.type === "task_missing") {
+        clearAllInlineLogs();
+      }
+      appendLog(JSON.stringify(payload));
     }
 
     async function startDownload() {
@@ -370,6 +455,7 @@
       appendLog(`任务已创建: ${currentTaskId}`);
       connectEvents(currentTaskId);
       await refreshSummary();
+      await refreshCoverage();
     }
 
     async function refreshTasks() {
@@ -384,11 +470,11 @@
 
     function connectEvents(taskId) {
       if (currentEventSource) currentEventSource.close();
+      clearAllInlineLogs();
       currentEventSource = new EventSource(`/api/tasks/${taskId}/events`);
       currentEventSource.onmessage = (event) => {
         const payload = JSON.parse(event.data);
-        if (payload.type === "heartbeat") return;
-        appendLog(JSON.stringify(payload));
+        handleSseLogPayload(payload);
         refreshTasks().catch((err) => appendLog(`刷新任务失败: ${err.message}`));
       };
       currentEventSource.onerror = () => {
@@ -404,6 +490,35 @@
       const resp = await fetch(`${api.summary}?${params.toString()}`);
       const data = await resp.json();
       document.getElementById("summaryJson").textContent = JSON.stringify(data.summary, null, 2);
+    }
+
+    async function refreshCoverage() {
+      const params = new URLSearchParams({
+        instrument_id: document.getElementById("instrument").value.trim(),
+        output_subdir: document.getElementById("outputSubdir").value.trim(),
+        timezone_name: document.getElementById("previewTimezone").value.trim() || "Asia/Shanghai",
+      });
+      const resp = await fetch(`${api.coverage}?${params.toString()}`);
+      const data = await resp.json();
+      const coverage = data.coverage || {};
+      const datasets = coverage.datasets || {};
+      const names = Object.keys(datasets);
+      document.getElementById("coverageMeta").textContent = `时区: ${coverage.timezone || "Asia/Shanghai"} | 数据集: ${names.length}`;
+      if (!names.length) {
+        document.getElementById("coverageJson").textContent = "无本地数据";
+        return;
+      }
+
+      const lines = [];
+      names.forEach((name) => {
+        const item = datasets[name] || {};
+        const dates = item.dates || [];
+        const range = item.min_date && item.max_date ? `${item.min_date} ~ ${item.max_date}` : "无日期";
+        lines.push(`${name}`);
+        lines.push(`  范围: ${range} | 天数: ${item.distinct_dates_count || 0} | 行数: ${item.rows_with_timestamp || 0}`);
+        lines.push(`  日期: ${dates.join(", ") || "-"}`);
+      });
+      document.getElementById("coverageJson").textContent = lines.join("\n");
     }
 
     async function loadPreview() {
@@ -897,6 +1012,9 @@
     document.getElementById("refreshSummaryBtn").addEventListener("click", () => {
       refreshSummary().catch((err) => appendLog(`刷新摘要失败: ${err.message}`));
     });
+    document.getElementById("refreshCoverageBtn").addEventListener("click", () => {
+      refreshCoverage().catch((err) => appendLog(`刷新看板失败: ${err.message}`));
+    });
     window.addEventListener("resize", () => {
       if (chartState.points.length) drawKlineChart();
     });
@@ -905,6 +1023,7 @@
     bindPreviewAutoReload();
     refreshTasks().catch(() => {});
     refreshSummary().catch(() => {});
+    refreshCoverage().catch(() => {});
     loadPreview().catch(() => {});
   </script>
 </body>

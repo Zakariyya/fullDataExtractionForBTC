@@ -1,6 +1,7 @@
 import tempfile
 import time
 import unittest
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -100,3 +101,68 @@ class ServiceTests(unittest.TestCase):
                 self.assertIsNotNone(snapshot)
                 self.assertEqual(snapshot.status, "completed")
                 self.assertEqual(mocked_collect.call_count, 0)
+                assert snapshot is not None
+                events = [json.loads(item) for item in snapshot.events_history]
+                skip_events = [evt for evt in events if evt.get("type") == "dataset_day_skipped"]
+                self.assertTrue(skip_events)
+                self.assertEqual(skip_events[0].get("reason"), "local_data_continuous")
+
+    def test_download_emits_day_minute_progress_for_candles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            service = DownloadService(Path(tmp), client_factory=lambda _base_url: FakeClient())
+
+            def fake_collect(**kwargs):  # noqa: ANN001
+                on_progress = kwargs.get("on_progress")
+                if on_progress is not None:
+                    start_ms = kwargs["start_ms"]
+                    end_ms = kwargs["end_ms"]
+                    on_progress(
+                        {
+                            "dataset": kwargs["dataset"],
+                            "page_count": 1,
+                            "rows_collected": 20,
+                            "oldest_in_page": end_ms - 30 * 60 * 1000,
+                        }
+                    )
+                    on_progress(
+                        {
+                            "dataset": kwargs["dataset"],
+                            "page_count": 2,
+                            "rows_collected": 40,
+                            "oldest_in_page": start_ms,
+                        }
+                    )
+                return [{"ts": 1710000000000, "iso_time": "2024-03-09T16:00:00Z", "close": "100"}]
+
+            with patch("full_data_extraction_for_btc.service.collect_dataset_rows", side_effect=fake_collect):
+                task = service.start_download(
+                    {
+                        "start": "2024-03-01T00:00:00",
+                        "end": "2024-03-01T01:00:00",
+                        "datasets": ["candles"],
+                        "instrument_id": "BTC-USDT-SWAP",
+                        "bar": "1m",
+                        "output_subdir": "data",
+                        "base_url": "https://www.okx.com",
+                        "input_timezone": "UTC",
+                    }
+                )
+
+                deadline = time.time() + 3
+                while time.time() < deadline:
+                    snapshot = service.get_task(task.task_id)
+                    if snapshot is not None and snapshot.status in {"completed", "failed"}:
+                        break
+                    time.sleep(0.05)
+
+                snapshot = service.get_task(task.task_id)
+                self.assertIsNotNone(snapshot)
+                assert snapshot is not None
+                self.assertEqual(snapshot.status, "completed")
+                events = [json.loads(item) for item in snapshot.events_history]
+                progress_events = [evt for evt in events if evt.get("type") == "dataset_day_progress"]
+                self.assertTrue(progress_events)
+                self.assertEqual(progress_events[0].get("processed_minutes"), 30)
+                self.assertEqual(progress_events[0].get("total_minutes"), 60)
+                self.assertEqual(progress_events[0].get("progress_pct"), 50.0)
+                self.assertEqual(progress_events[-1].get("progress_pct"), 100.0)

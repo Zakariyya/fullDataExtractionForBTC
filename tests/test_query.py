@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from full_data_extraction_for_btc.query import build_data_summary, preview_dataset_rows
+from full_data_extraction_for_btc.query import build_data_coverage, build_data_summary, preview_dataset_rows
 
 
 class QueryTests(unittest.TestCase):
@@ -101,3 +101,19 @@ class QueryTests(unittest.TestCase):
             self.assertEqual(preview[0]["close"], "118")
             self.assertEqual(preview[1]["open"], "100")
             self.assertEqual(preview[1]["close"], "105")
+
+    def test_build_data_coverage_lists_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "data" / "okx" / "BTC-USDT-SWAP"
+            data_file = root / "candles" / "year=2026" / "month=04" / "data.csv.gz"
+            data_file.parent.mkdir(parents=True, exist_ok=True)
+            with gzip.open(data_file, "wt", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "close"])
+                writer.writeheader()
+                writer.writerow({"ts": "1774972800000", "close": "100"})
+                writer.writerow({"ts": "1775059200000", "close": "101"})
+
+            coverage = build_data_coverage(Path(tmp) / "data", "BTC-USDT-SWAP", timezone_name="UTC")
+            candles = coverage["datasets"]["candles"]
+            self.assertEqual(candles["distinct_dates_count"], 2)
+            self.assertEqual(candles["dates"], ["2026-03-31", "2026-04-01"])
