@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from full_data_extraction_for_btc.query import build_data_summary, preview_dataset_rows
+from full_data_extraction_for_btc.query import build_data_coverage, build_data_summary, preview_dataset_rows
 from full_data_extraction_for_btc.service import DownloadService
 
 LOGGER = logging.getLogger("full_data_extraction_for_btc.webapp")
@@ -97,6 +97,19 @@ def create_app(output_root: Path) -> FastAPI:
         summary = build_data_summary(output_root / output_subdir, instrument_id=instrument_id)
         return {"summary": summary}
 
+    @app.get("/api/data/coverage")
+    def data_coverage(
+        instrument_id: str = "BTC-USDT-SWAP",
+        output_subdir: str = "data",
+        timezone_name: str = "Asia/Shanghai",
+    ) -> dict[str, Any]:
+        coverage = build_data_coverage(
+            output_root / output_subdir,
+            instrument_id=instrument_id,
+            timezone_name=timezone_name,
+        )
+        return {"coverage": coverage}
+
     @app.get("/api/data/preview")
     def data_preview(
         dataset: str,
@@ -122,7 +135,7 @@ def create_app(output_root: Path) -> FastAPI:
             output_root=output_root / output_subdir,
             instrument_id=instrument_id,
             dataset_path=dataset,
-            limit=max(1, min(limit, 5000)),
+            limit=max(0, min(limit, 200000)),
             start=start,
             end=end,
             input_timezone=input_timezone,

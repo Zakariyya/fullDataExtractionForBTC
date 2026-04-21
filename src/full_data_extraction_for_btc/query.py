@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from full_data_extraction_for_btc.timeutils import parse_datetime_input, to_iso_local, to_iso_utc
+from full_data_extraction_for_btc.timeutils import parse_datetime_input, to_iso_local, to_iso_utc, to_local_date
 
 SUPPORTED_KLINE_INTERVALS = {"1m", "5m", "30m", "1h", "1d", "3d", "1w", "1M", "1Y"}
 
@@ -34,6 +34,43 @@ def build_data_summary(output_root: Path, instrument_id: str) -> dict[str, Any]:
         "partitions": partitions,
         "manifests": manifests,
     }
+
+
+def build_data_coverage(output_root: Path, instrument_id: str, timezone_name: str = "Asia/Shanghai") -> dict[str, Any]:
+    base = output_root / "okx" / instrument_id
+    datasets: dict[str, Any] = {}
+    if not base.exists():
+        return {"base_path": str(base), "exists": False, "timezone": timezone_name, "datasets": datasets}
+
+    for dataset_dir in sorted(base.glob("*")):
+        if not dataset_dir.is_dir() or dataset_dir.name == "metadata":
+            continue
+        all_dates: set[str] = set()
+        row_count = 0
+        min_ts: int | None = None
+        max_ts: int | None = None
+        for path in sorted(dataset_dir.glob("year=*/month=*/data.csv.gz")):
+            with gzip.open(path, "rt", encoding="utf-8", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    ts = _row_timestamp(row)
+                    if ts is None:
+                        continue
+                    row_count += 1
+                    min_ts = ts if min_ts is None else min(min_ts, ts)
+                    max_ts = ts if max_ts is None else max(max_ts, ts)
+                    all_dates.add(to_local_date(ts, timezone_name))
+        dates = sorted(all_dates)
+        datasets[dataset_dir.name] = {
+            "rows_with_timestamp": row_count,
+            "min_date": dates[0] if dates else None,
+            "max_date": dates[-1] if dates else None,
+            "distinct_dates_count": len(dates),
+            "dates": dates,
+            "min_iso_time_utc": to_iso_utc(min_ts) if min_ts is not None else None,
+            "max_iso_time_utc": to_iso_utc(max_ts) if max_ts is not None else None,
+        }
+
+    return {"base_path": str(base), "exists": True, "timezone": timezone_name, "datasets": datasets}
 
 
 def preview_dataset_rows(
@@ -74,6 +111,8 @@ def preview_dataset_rows(
         rows = _aggregate_kline_rows(rows, interval=interval, tz_name=input_timezone)
 
     rows.sort(key=lambda item: int(_row_timestamp(item) or 0), reverse=True)
+    if limit <= 0:
+        return rows
     return rows[:limit]
 
 

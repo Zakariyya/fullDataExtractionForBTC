@@ -33,6 +33,11 @@ class QueryTests(unittest.TestCase):
             self.assertEqual(len(preview), 1)
             self.assertEqual(preview[0]["ts"], "2")
 
+            preview_all = preview_dataset_rows(Path(tmp) / "data", "BTC-USDT-SWAP", "candles", limit=0)
+            self.assertEqual(len(preview_all), 2)
+            self.assertEqual(preview_all[0]["ts"], "2")
+            self.assertEqual(preview_all[1]["ts"], "1")
+
     def test_preview_with_date_range_and_kline_interval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "data" / "okx" / "BTC-USDT-SWAP"

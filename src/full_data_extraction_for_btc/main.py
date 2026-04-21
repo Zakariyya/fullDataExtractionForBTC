@@ -10,6 +10,7 @@ from full_data_extraction_for_btc.cli import build_parser
 from full_data_extraction_for_btc.client import OkxPublicClient
 from full_data_extraction_for_btc.downloader import DATASET_TO_PATH, collect_dataset_rows
 from full_data_extraction_for_btc.storage import DatasetStorage
+from full_data_extraction_for_btc.terminal_logging import configure_terminal_logging
 from full_data_extraction_for_btc.timeutils import parse_datetime_input
 from full_data_extraction_for_btc.webapp import create_app
 
@@ -17,10 +18,7 @@ LOGGER = logging.getLogger("full_data_extraction_for_btc")
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-    )
+    console = configure_terminal_logging(level=logging.INFO)
     parser = build_parser()
     args = parser.parse_args()
     if args.command == "serve":
@@ -56,14 +54,15 @@ def main() -> int:
             bar=args.bar,
             start_ms=start_ms,
             end_ms=end_ms,
-            on_progress=lambda payload, ds=dataset: LOGGER.info(
-                "Dataset progress: dataset=%s page=%s rows_collected=%s oldest_in_page=%s",
-                ds,
-                payload.get("page_count"),
-                payload.get("rows_collected"),
-                payload.get("oldest_in_page"),
+            on_progress=lambda payload, ds=dataset: console.inline(
+                "progress"
+                f" | dataset={ds}"
+                f" | page={payload.get('page_count')}"
+                f" | rows={payload.get('rows_collected')}"
+                f" | oldest={payload.get('oldest_in_page')}"
             ),
         )
+        console.clear_inline()
         summary = storage.write_rows(DATASET_TO_PATH[dataset], rows, primary_key="funding_time" if dataset == "funding" else "ts")
         summary["requested_dataset"] = dataset
         if dataset == "funding":
@@ -75,5 +74,6 @@ def main() -> int:
             summary["rows_written"],
         )
 
+    console.clear_inline()
     print(json.dumps({"instrument_id": args.instrument_id, "summaries": summaries}, indent=2, ensure_ascii=True))
     return 0

@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import csv
+import gzip
 import json
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from full_data_extraction_for_btc.client import OkxPublicClient
-from full_data_extraction_for_btc.downloader import DATASET_TO_PATH, collect_dataset_rows
+from full_data_extraction_for_btc.downloader import CANDLE_DATASETS, DATASET_TO_PATH, collect_dataset_rows
 from full_data_extraction_for_btc.storage import DatasetStorage
 from full_data_extraction_for_btc.timeutils import parse_datetime_input
 
@@ -119,17 +123,56 @@ class DownloadService:
             summaries: list[dict[str, Any]] = []
             for dataset in datasets:
                 self._emit(task, {"type": "dataset_started", "dataset": dataset})
-                rows = collect_dataset_rows(
-                    client=client,
-                    dataset=dataset,
-                    instrument_id=instrument_id,
-                    bar=bar,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
-                    on_progress=lambda payload, ds=dataset: self._emit(
-                        task, {"type": "dataset_progress", "dataset": ds, **payload}
-                    ),
-                )
+                if dataset in CANDLE_DATASETS:
+                    rows: list[dict[str, Any]] = []
+                    for day_start_ms, day_end_ms in _iter_day_windows(
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                        tz_name=input_tz,
+                    ):
+                        if _is_local_day_continuous(
+                            output_root=output,
+                            instrument_id=instrument_id,
+                            dataset_path=DATASET_TO_PATH[dataset],
+                            day_start_ms=day_start_ms,
+                            day_end_ms=day_end_ms,
+                            bar=bar,
+                        ):
+                            self._emit(
+                                task,
+                                {
+                                    "type": "dataset_day_skipped",
+                                    "dataset": dataset,
+                                    "day_start_ms": day_start_ms,
+                                    "day_end_ms": day_end_ms,
+                                    "reason": "local_data_continuous",
+                                },
+                            )
+                            continue
+                        day_rows = collect_dataset_rows(
+                            client=client,
+                            dataset=dataset,
+                            instrument_id=instrument_id,
+                            bar=bar,
+                            start_ms=day_start_ms,
+                            end_ms=day_end_ms,
+                            on_progress=lambda payload, ds=dataset: self._emit(
+                                task, {"type": "dataset_progress", "dataset": ds, **payload}
+                            ),
+                        )
+                        rows.extend(day_rows)
+                else:
+                    rows = collect_dataset_rows(
+                        client=client,
+                        dataset=dataset,
+                        instrument_id=instrument_id,
+                        bar=bar,
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                        on_progress=lambda payload, ds=dataset: self._emit(
+                            task, {"type": "dataset_progress", "dataset": ds, **payload}
+                        ),
+                    )
                 summary = storage.write_rows(
                     DATASET_TO_PATH[dataset],
                     rows,
@@ -160,3 +203,70 @@ class DownloadService:
             task.events_history.append(event)
             task.updated_at = time.time()
         task.event_queue.put(event)
+
+
+def _iter_day_windows(start_ms: int, end_ms: int, tz_name: str) -> list[tuple[int, int]]:
+    if end_ms <= start_ms:
+        return []
+    tz = ZoneInfo(tz_name)
+    start_local = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).astimezone(tz)
+    end_local = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).astimezone(tz)
+    day_cursor = start_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = end_local.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    windows: list[tuple[int, int]] = []
+    while day_cursor <= end_day:
+        day_start_ms = int(day_cursor.astimezone(timezone.utc).timestamp() * 1000)
+        next_day = day_cursor + timedelta(days=1)
+        day_end_ms = int(next_day.astimezone(timezone.utc).timestamp() * 1000)
+        windows.append((max(start_ms, day_start_ms), min(end_ms, day_end_ms)))
+        day_cursor = next_day
+    return [(left, right) for left, right in windows if right > left]
+
+
+def _bar_to_ms(bar: str) -> int | None:
+    value = bar.strip()
+    if value.endswith("m"):
+        return int(value[:-1]) * 60 * 1000
+    if value.endswith("h"):
+        return int(value[:-1]) * 60 * 60 * 1000
+    if value.endswith("d"):
+        return int(value[:-1]) * 24 * 60 * 60 * 1000
+    if value.endswith("w"):
+        return int(value[:-1]) * 7 * 24 * 60 * 60 * 1000
+    return None
+
+
+def _is_local_day_continuous(
+    output_root: Path,
+    instrument_id: str,
+    dataset_path: str,
+    day_start_ms: int,
+    day_end_ms: int,
+    bar: str,
+) -> bool:
+    step_ms = _bar_to_ms(bar)
+    if step_ms is None or day_end_ms <= day_start_ms:
+        return False
+
+    dataset_root = output_root / "okx" / instrument_id / dataset_path
+    if not dataset_root.exists():
+        return False
+
+    existing_ts: set[int] = set()
+    for path in sorted(dataset_root.glob("year=*/month=*/data.csv.gz")):
+        with gzip.open(path, "rt", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                raw_ts = row.get("ts")
+                if not raw_ts:
+                    continue
+                try:
+                    ts = int(raw_ts)
+                except ValueError:
+                    continue
+                if day_start_ms <= ts < day_end_ms:
+                    existing_ts.add(ts)
+
+    if not existing_ts:
+        return False
+    return all(ts in existing_ts for ts in range(day_start_ms, day_end_ms, step_ms))

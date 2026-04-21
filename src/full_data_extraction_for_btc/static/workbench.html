@@ -263,10 +263,10 @@
           <input id="previewLimit" value="500">
 
           <label for="previewStart">开始时间</label>
-          <input id="previewStart" value="2026-04-01">
+          <input id="previewStart" type="date" value="2026-04-01">
 
           <label for="previewEnd">结束时间</label>
-          <input id="previewEnd" value="2026-04-02">
+          <input id="previewEnd" type="date" value="2026-04-02">
 
           <label for="previewTimezone">查询时区</label>
           <input id="previewTimezone" value="Asia/Shanghai">
@@ -284,9 +284,6 @@
             <option value="1M">1M</option>
             <option value="1Y">1Y</option>
           </select>
-        </div>
-        <div class="actions">
-          <button class="btn-ghost" id="previewBtn">加载预览</button>
         </div>
         <div class="chart-wrap">
           <div class="hint" id="chartHint">K线图（仅在含 OHLC 数据时显示）</div>
@@ -410,13 +407,19 @@
     }
 
     async function loadPreview() {
+      const rawStart = document.getElementById("previewStart").value.trim();
+      const rawEnd = document.getElementById("previewEnd").value.trim();
+      const endForQuery = normalizeEndForDateRange(rawStart, rawEnd);
+      const inputLimit = Number.parseInt(document.getElementById("previewLimit").value.trim(), 10);
+      const tableLimit = Number.isFinite(inputLimit) ? Math.max(1, Math.min(inputLimit, 5000)) : 500;
+      const chartLimit = 0;
       const params = new URLSearchParams({
         dataset: document.getElementById("previewDataset").value,
-        limit: document.getElementById("previewLimit").value.trim(),
+        limit: String(chartLimit),
         instrument_id: document.getElementById("instrument").value.trim(),
         output_subdir: document.getElementById("outputSubdir").value.trim(),
-        start: document.getElementById("previewStart").value.trim(),
-        end: document.getElementById("previewEnd").value.trim(),
+        start: rawStart,
+        end: endForQuery,
         input_timezone: document.getElementById("previewTimezone").value.trim() || "Asia/Shanghai",
         kline_interval: document.getElementById("klineInterval").value,
       });
@@ -424,8 +427,18 @@
       if (!resp.ok) throw new Error("请求数据预览失败");
       const data = await resp.json();
       const rows = data.rows || [];
-      renderTable(rows);
+      renderTable(rows.slice(0, tableLimit));
       renderKlineChart(rows, document.getElementById("klineInterval").value);
+    }
+
+    function normalizeEndForDateRange(startValue, endValue) {
+      if (!startValue || !endValue) return endValue;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(endValue)) return endValue;
+      const endDate = new Date(`${endValue}T00:00:00`);
+      if (Number.isNaN(endDate.getTime())) return endValue;
+      endDate.setDate(endDate.getDate() + 1);
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${endDate.getFullYear()}-${pad(endDate.getMonth() + 1)}-${pad(endDate.getDate())}`;
     }
 
     function renderTable(rows) {
@@ -461,6 +474,12 @@
       const dt = new Date(tsMs);
       const pad = (value) => String(value).padStart(2, "0");
       return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+    }
+
+    function formatDateOnly(tsMs) {
+      const dt = new Date(tsMs);
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
     }
 
     function formatPrice(value) {
@@ -542,8 +561,8 @@
       const start = chartState.points[chartState.visibleStart];
       const end = chartState.points[chartState.visibleEnd];
       if (!start || !end) return;
-      document.getElementById("previewStart").value = formatTsMs(start.tsMs);
-      document.getElementById("previewEnd").value = formatTsMs(end.tsMs);
+      document.getElementById("previewStart").value = formatDateOnly(start.tsMs);
+      document.getElementById("previewEnd").value = formatDateOnly(end.tsMs);
     }
 
     function updateWindowSlider() {
@@ -611,7 +630,6 @@
       chartState.visibleStart = 0;
       chartState.visibleEnd = points.length - 1;
       chartState.crosshairIndex = points.length - 1;
-      setPreviewWindowInputs();
       updateWindowSlider();
       drawKlineChart();
     }
@@ -857,6 +875,19 @@
       });
     }
 
+    function bindPreviewAutoReload() {
+      const ids = ["previewDataset", "previewLimit", "previewStart", "previewEnd", "previewTimezone", "klineInterval"];
+      const trigger = () => {
+        loadPreview().catch((err) => appendLog(`预览失败: ${err.message}`));
+      };
+      ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener("blur", trigger);
+        el.addEventListener("change", trigger);
+      });
+    }
+
     document.getElementById("startBtn").addEventListener("click", () => {
       startDownload().catch((err) => appendLog(`启动失败: ${err.message}`));
     });
@@ -866,14 +897,12 @@
     document.getElementById("refreshSummaryBtn").addEventListener("click", () => {
       refreshSummary().catch((err) => appendLog(`刷新摘要失败: ${err.message}`));
     });
-    document.getElementById("previewBtn").addEventListener("click", () => {
-      loadPreview().catch((err) => appendLog(`预览失败: ${err.message}`));
-    });
     window.addEventListener("resize", () => {
       if (chartState.points.length) drawKlineChart();
     });
 
     bindChartInteractions();
+    bindPreviewAutoReload();
     refreshTasks().catch(() => {});
     refreshSummary().catch(() => {});
     loadPreview().catch(() => {});
