@@ -31,7 +31,7 @@
       padding: 24px;
     }
 
-    .container { max-width: 1380px; margin: 0 auto; }
+    .container { max-width: 1440px; margin: 0 auto; }
     .header {
       padding: 20px; border: 1px solid var(--line); border-radius: var(--radius);
       background: rgba(255, 255, 255, 0.75); box-shadow: var(--shadow); margin-bottom: 16px;
@@ -45,12 +45,15 @@
       gap: 16px;
       align-items: start;
     }
+    .preview-full { grid-column: 1 / -1; }
+
     .card {
       border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
       box-shadow: var(--shadow); padding: 16px; margin-bottom: 16px;
     }
     .card h2 { margin: 0 0 12px; font-size: 18px; }
     .grid { display: grid; grid-template-columns: 130px 1fr; gap: 8px 10px; align-items: center; }
+    .grid-wide { display: grid; grid-template-columns: 130px 1fr 130px 1fr; gap: 8px 10px; align-items: center; }
     label { color: var(--muted); font-size: 13px; font-weight: 600; }
     input, select {
       width: 100%; border: 1px solid var(--line); border-radius: 10px;
@@ -79,12 +82,111 @@
       white-space: pre-wrap;
     }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { border-bottom: 1px solid #e6ebf5; text-align: left; padding: 8px; }
+    th, td { border-bottom: 1px solid #e6ebf5; text-align: left; padding: 8px; white-space: nowrap; }
     th { color: #38506e; background: #f5f8ff; position: sticky; top: 0; }
-    .table-wrap { max-height: 380px; overflow: auto; border: 1px solid #d7dfef; border-radius: 10px; }
+    .table-wrap { max-height: 420px; overflow: auto; border: 1px solid #d7dfef; border-radius: 10px; }
+    .chart-wrap {
+      border: 1px solid #d7dfef;
+      border-radius: 10px;
+      background: #ffffff;
+      margin-bottom: 12px;
+      padding: 8px;
+      min-height: 356px;
+      position: relative;
+    }
+    #klineCanvas {
+      width: 100%;
+      height: 300px;
+      display: block;
+      outline: none;
+    }
+    .hint {
+      position: absolute;
+      left: 12px;
+      top: 10px;
+      color: #5f7395;
+      font-size: 12px;
+    }
+    .crosshair-tooltip {
+      position: absolute;
+      min-width: 220px;
+      max-width: 300px;
+      background: rgba(15, 23, 42, 0.94);
+      color: #dbeafe;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+      pointer-events: none;
+      z-index: 4;
+      display: none;
+      box-shadow: 0 8px 24px rgba(2, 6, 23, 0.25);
+      white-space: pre-line;
+    }
+    .y-axis-label {
+      position: absolute;
+      right: 8px;
+      background: #0f172a;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 12px;
+      line-height: 1.2;
+      pointer-events: none;
+      z-index: 4;
+      display: none;
+      transform: translateY(-50%);
+    }
+    .window-slider {
+      position: absolute;
+      left: 48px;
+      right: 18px;
+      bottom: 10px;
+      height: 22px;
+      border-radius: 6px;
+      outline: none;
+      user-select: none;
+    }
+    .window-slider .ws-track {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 8px;
+      height: 6px;
+      border-radius: 3px;
+      background: #e3ebf9;
+    }
+    .window-slider .ws-selection {
+      position: absolute;
+      top: 4px;
+      height: 14px;
+      background: rgba(15, 118, 110, 0.2);
+      border: 1px solid rgba(15, 118, 110, 0.55);
+      border-radius: 7px;
+      cursor: grab;
+    }
+    .window-slider .ws-selection.dragging { cursor: grabbing; }
+    .window-slider .ws-handle {
+      position: absolute;
+      top: -2px;
+      width: 12px;
+      height: 18px;
+      border-radius: 4px;
+      border: 1px solid #1d6f68;
+      background: #ffffff;
+      cursor: ew-resize;
+    }
+    .window-slider .ws-handle.left { left: -6px; }
+    .window-slider .ws-handle.right { right: -6px; }
 
+    @media (max-width: 1280px) {
+      .grid-wide { grid-template-columns: 130px 1fr; }
+    }
     @media (max-width: 1100px) {
       .layout { grid-template-columns: 1fr; }
+      .preview-full { grid-column: auto; }
     }
   </style>
 </head>
@@ -92,7 +194,7 @@
   <div class="container">
     <section class="header">
       <h1>BTC 回测数据工作台</h1>
-      <div class="sub">双栏均衡：左侧负责下载任务，右侧负责质量检查与数据预览。面向 OKX 永续合约分钟级研究数据。</div>
+      <div class="sub">左侧下载任务，右侧摘要，底部全宽预览。支持按日期范围查看全量数据，并可聚合为多周期 K 线。</div>
     </section>
 
     <section class="layout">
@@ -103,11 +205,14 @@
             <label for="instrument">交易对</label>
             <input id="instrument" value="BTC-USDT-SWAP">
 
-            <label for="start">开始时间 (UTC)</label>
-            <input id="start" value="2026-04-01">
+            <label for="start">开始时间</label>
+            <input id="start" type="date" value="2026-04-01">
 
-            <label for="end">结束时间 (UTC)</label>
-            <input id="end" value="2026-04-02">
+            <label for="end">结束时间</label>
+            <input id="end" type="date" value="2026-04-02">
+
+            <label for="inputTimezone">输入时区</label>
+            <input id="inputTimezone" value="UTC">
 
             <label for="datasets">数据集</label>
             <input id="datasets" value="candles,mark,index,funding">
@@ -141,31 +246,68 @@
           </div>
           <div class="json" id="summaryJson">{}</div>
         </article>
-
-        <article class="card">
-          <h2>数据预览</h2>
-          <div class="grid">
-            <label for="previewDataset">数据集路径</label>
-            <select id="previewDataset">
-              <option value="candles">candles</option>
-              <option value="mark_price_candles">mark_price_candles</option>
-              <option value="index_candles">index_candles</option>
-              <option value="funding_rates">funding_rates</option>
-            </select>
-            <label for="previewLimit">行数</label>
-            <input id="previewLimit" value="30">
-          </div>
-          <div class="actions">
-            <button class="btn-ghost" id="previewBtn">加载预览</button>
-          </div>
-          <div class="table-wrap">
-            <table id="previewTable">
-              <thead></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </article>
       </div>
+
+      <article class="card preview-full">
+        <h2>数据预览</h2>
+        <div class="grid-wide">
+          <label for="previewDataset">数据集路径</label>
+          <select id="previewDataset">
+            <option value="candles">candles</option>
+            <option value="mark_price_candles">mark_price_candles</option>
+            <option value="index_candles">index_candles</option>
+            <option value="funding_rates">funding_rates</option>
+          </select>
+
+          <label for="previewLimit">返回行数</label>
+          <input id="previewLimit" value="500">
+
+          <label for="previewStart">开始时间</label>
+          <input id="previewStart" value="2026-04-01">
+
+          <label for="previewEnd">结束时间</label>
+          <input id="previewEnd" value="2026-04-02">
+
+          <label for="previewTimezone">查询时区</label>
+          <input id="previewTimezone" value="Asia/Shanghai">
+
+          <label for="klineInterval">K 线周期</label>
+          <select id="klineInterval">
+            <option value="raw">原始数据</option>
+            <option value="1m">1m</option>
+            <option value="5m">5m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+            <option value="1d">1d</option>
+            <option value="3d">3d</option>
+            <option value="1w">1w</option>
+            <option value="1M">1M</option>
+            <option value="1Y">1Y</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button class="btn-ghost" id="previewBtn">加载预览</button>
+        </div>
+        <div class="chart-wrap">
+          <div class="hint" id="chartHint">K线图（仅在含 OHLC 数据时显示）</div>
+          <canvas id="klineCanvas" tabindex="0"></canvas>
+          <div class="crosshair-tooltip" id="crosshairTooltip"></div>
+          <div class="y-axis-label" id="yAxisLabel"></div>
+          <div class="window-slider" id="windowSlider" tabindex="0">
+            <div class="ws-track"></div>
+            <div class="ws-selection" id="windowSelection">
+              <div class="ws-handle left" id="windowHandleLeft"></div>
+              <div class="ws-handle right" id="windowHandleRight"></div>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="previewTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </article>
     </section>
   </div>
 
@@ -179,6 +321,26 @@
 
     let currentTaskId = null;
     let currentEventSource = null;
+    const chartState = {
+      intervalLabel: "原始数据",
+      points: [],
+      visibleStart: 0,
+      visibleEnd: 0,
+      crosshairIndex: null,
+      layout: null,
+      dragType: null,
+      dragStartX: 0,
+      dragStartVisibleStart: 0,
+      dragStartVisibleEnd: 0,
+    };
+
+    const windowSlider = document.getElementById("windowSlider");
+    const windowSelection = document.getElementById("windowSelection");
+    const windowHandleLeft = document.getElementById("windowHandleLeft");
+    const windowHandleRight = document.getElementById("windowHandleRight");
+    const klineCanvas = document.getElementById("klineCanvas");
+    const crosshairTooltip = document.getElementById("crosshairTooltip");
+    const yAxisLabel = document.getElementById("yAxisLabel");
 
     function appendLog(line) {
       const box = document.getElementById("logBox");
@@ -191,6 +353,7 @@
       const payload = {
         start: document.getElementById("start").value.trim(),
         end: document.getElementById("end").value.trim(),
+        input_timezone: document.getElementById("inputTimezone").value.trim() || "UTC",
         instrument_id: document.getElementById("instrument").value.trim(),
         datasets: document.getElementById("datasets").value.split(",").map(x => x.trim()).filter(Boolean),
         output_subdir: document.getElementById("outputSubdir").value.trim(),
@@ -252,10 +415,17 @@
         limit: document.getElementById("previewLimit").value.trim(),
         instrument_id: document.getElementById("instrument").value.trim(),
         output_subdir: document.getElementById("outputSubdir").value.trim(),
+        start: document.getElementById("previewStart").value.trim(),
+        end: document.getElementById("previewEnd").value.trim(),
+        input_timezone: document.getElementById("previewTimezone").value.trim() || "Asia/Shanghai",
+        kline_interval: document.getElementById("klineInterval").value,
       });
       const resp = await fetch(`${api.preview}?${params.toString()}`);
+      if (!resp.ok) throw new Error("请求数据预览失败");
       const data = await resp.json();
-      renderTable(data.rows || []);
+      const rows = data.rows || [];
+      renderTable(rows);
+      renderKlineChart(rows, document.getElementById("klineInterval").value);
     }
 
     function renderTable(rows) {
@@ -287,6 +457,406 @@
       });
     }
 
+    function formatTsMs(tsMs) {
+      const dt = new Date(tsMs);
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+    }
+
+    function formatPrice(value) {
+      return new Intl.NumberFormat("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2}).format(value);
+    }
+
+    function hideCrosshairOverlays() {
+      crosshairTooltip.style.display = "none";
+      yAxisLabel.style.display = "none";
+    }
+
+    function chooseTimeAxisGranularity(spanMs) {
+      const hourMs = 60 * 60 * 1000;
+      const dayMs = 24 * hourMs;
+      if (spanMs <= 12 * hourMs) return "minute";
+      if (spanMs <= 10 * dayMs) return "hour";
+      if (spanMs >= 365 * dayMs) return "quarter";
+      if (spanMs >= 60 * dayMs) return "week";
+      return "day";
+    }
+
+    function formatAxisLabel(tsMs, granularity) {
+      const dt = new Date(tsMs);
+      const pad = (value) => String(value).padStart(2, "0");
+      if (granularity === "minute") return `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+      if (granularity === "hour") return `${pad(dt.getDate())} ${pad(dt.getHours())}:00`;
+      if (granularity === "week") return `${dt.getMonth() + 1}/${dt.getDate()}`;
+      if (granularity === "quarter") return `${dt.getFullYear()} Q${Math.floor(dt.getMonth() / 3) + 1}`;
+      return `${dt.getMonth() + 1}/${dt.getDate()}`;
+    }
+
+    function drawTimeAxis(ctx, width, height, left, right, top, bottom, windowPoints, toX) {
+      const windowStart = windowPoints[0].tsMs;
+      const windowEnd = windowPoints[windowPoints.length - 1].tsMs;
+      const spanMs = Math.max(1, windowEnd - windowStart);
+      const granularity = chooseTimeAxisGranularity(spanMs);
+      const tickCount = Math.max(4, Math.min(8, Math.floor((width - left - right) / 120)));
+      const labels = [];
+      const seen = new Set();
+      for (let i = 0; i <= tickCount; i += 1) {
+        const ratio = i / tickCount;
+        const idx = Math.min(windowPoints.length - 1, Math.max(0, Math.round(ratio * (windowPoints.length - 1))));
+        const point = windowPoints[idx];
+        const label = formatAxisLabel(point.tsMs, granularity);
+        const key = `${label}-${idx}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        labels.push({tsMs: point.tsMs, label});
+      }
+
+      ctx.strokeStyle = "#94a3b8";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(left, height - bottom);
+      ctx.lineTo(width - right, height - bottom);
+      ctx.stroke();
+
+      ctx.fillStyle = "#475569";
+      ctx.font = "11px sans-serif";
+      labels.forEach((tick) => {
+        const x = toX(tick.tsMs);
+        ctx.beginPath();
+        ctx.moveTo(x, height - bottom);
+        ctx.lineTo(x, height - bottom + 4);
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.fillText(tick.label, x, height - 8);
+      });
+      ctx.textAlign = "left";
+    }
+
+    function normalizeTsMs(ts) {
+      if (!Number.isFinite(ts)) return NaN;
+      return ts < 1e12 ? ts * 1000 : ts;
+    }
+
+    function setPreviewWindowInputs() {
+      if (!chartState.points.length) return;
+      const start = chartState.points[chartState.visibleStart];
+      const end = chartState.points[chartState.visibleEnd];
+      if (!start || !end) return;
+      document.getElementById("previewStart").value = formatTsMs(start.tsMs);
+      document.getElementById("previewEnd").value = formatTsMs(end.tsMs);
+    }
+
+    function updateWindowSlider() {
+      const total = chartState.points.length;
+      if (total < 2) {
+        windowSlider.style.display = "none";
+        return;
+      }
+      windowSlider.style.display = "block";
+      const denom = total - 1;
+      const startPct = chartState.visibleStart / denom;
+      const endPct = chartState.visibleEnd / denom;
+      windowSelection.style.left = `${(startPct * 100).toFixed(4)}%`;
+      windowSelection.style.width = `${Math.max(1, (endPct - startPct) * 100).toFixed(4)}%`;
+    }
+
+    function applyWindowRange(newStart, newEnd, shouldSyncInputs = true) {
+      const total = chartState.points.length;
+      if (!total) return;
+      const minIndex = 0;
+      const maxIndex = total - 1;
+      chartState.visibleStart = Math.min(Math.max(minIndex, Math.round(newStart)), maxIndex);
+      chartState.visibleEnd = Math.min(Math.max(minIndex, Math.round(newEnd)), maxIndex);
+      if (chartState.visibleStart > chartState.visibleEnd) {
+        const tmp = chartState.visibleStart;
+        chartState.visibleStart = chartState.visibleEnd;
+        chartState.visibleEnd = tmp;
+      }
+      if (chartState.crosshairIndex !== null) {
+        chartState.crosshairIndex = Math.min(Math.max(chartState.visibleStart, chartState.crosshairIndex), chartState.visibleEnd);
+      }
+      if (shouldSyncInputs) setPreviewWindowInputs();
+      updateWindowSlider();
+      drawKlineChart();
+    }
+
+    function renderKlineChart(rows, interval) {
+      const points = rows
+        .map((row) => {
+          const tsMs = normalizeTsMs(Number(row.ts));
+          return {
+            ts: Number(row.ts),
+            tsMs,
+            open: Number(row.open),
+            high: Number(row.high),
+            low: Number(row.low),
+            close: Number(row.close),
+          };
+        })
+        .filter((item) => Number.isFinite(item.tsMs) && Number.isFinite(item.open) && Number.isFinite(item.high) && Number.isFinite(item.low) && Number.isFinite(item.close))
+        .sort((a, b) => a.tsMs - b.tsMs);
+
+      const hint = document.getElementById("chartHint");
+      if (!points.length) {
+        hint.textContent = "当前数据不包含 OHLC，无法绘制 K 线。";
+        chartState.points = [];
+        chartState.layout = null;
+        hideCrosshairOverlays();
+        updateWindowSlider();
+        drawKlineChart();
+        return;
+      }
+      chartState.intervalLabel = interval === "raw" ? "原始数据" : interval;
+      chartState.points = points;
+      chartState.visibleStart = 0;
+      chartState.visibleEnd = points.length - 1;
+      chartState.crosshairIndex = points.length - 1;
+      setPreviewWindowInputs();
+      updateWindowSlider();
+      drawKlineChart();
+    }
+
+    function drawKlineChart() {
+      const hint = document.getElementById("chartHint");
+      const canvas = klineCanvas;
+      const ctx = canvas.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+
+      const all = chartState.points;
+      if (!all.length) {
+        hideCrosshairOverlays();
+        return;
+      }
+
+      const windowPoints = all.slice(chartState.visibleStart, chartState.visibleEnd + 1);
+      if (!windowPoints.length) return;
+
+      const minPrice = Math.min(...windowPoints.map((item) => item.low));
+      const maxPrice = Math.max(...windowPoints.map((item) => item.high));
+      const top = 22;
+      const bottom = 34;
+      const left = 44;
+      const right = 16;
+      const drawWidth = Math.max(10, width - left - right);
+      const drawHeight = Math.max(10, height - top - bottom);
+      const priceSpan = Math.max(1e-9, maxPrice - minPrice);
+      const barGap = drawWidth / windowPoints.length;
+      const bodyWidth = Math.max(1, Math.min(10, barGap * 0.68));
+      const toY = (price) => top + (maxPrice - price) / priceSpan * drawHeight;
+      const toX = (tsMs) => {
+        const ratio = (tsMs - windowPoints[0].tsMs) / Math.max(1, windowPoints[windowPoints.length - 1].tsMs - windowPoints[0].tsMs);
+        return left + ratio * drawWidth;
+      };
+
+      chartState.layout = {left, right, top, bottom, drawWidth, drawHeight, barGap, toY};
+
+      ctx.strokeStyle = "#d9e3f5";
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 4; i += 1) {
+        const y = top + (drawHeight / 3) * i;
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(width - right, y);
+        ctx.stroke();
+      }
+
+      windowPoints.forEach((item, idx) => {
+        const x = left + idx * barGap + barGap / 2;
+        const yHigh = toY(item.high);
+        const yLow = toY(item.low);
+        const yOpen = toY(item.open);
+        const yClose = toY(item.close);
+        const rise = item.close >= item.open;
+        ctx.strokeStyle = rise ? "#16a34a" : "#dc2626";
+        ctx.fillStyle = rise ? "#16a34a" : "#dc2626";
+
+        ctx.beginPath();
+        ctx.moveTo(x, yHigh);
+        ctx.lineTo(x, yLow);
+        ctx.stroke();
+
+        const bodyTop = Math.min(yOpen, yClose);
+        const bodyHeight = Math.max(1, Math.abs(yClose - yOpen));
+        ctx.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
+      });
+
+      drawTimeAxis(ctx, width, height, left, right, top, bottom, windowPoints, toX);
+
+      const windowStart = windowPoints[0].tsMs;
+      const windowEnd = windowPoints[windowPoints.length - 1].tsMs;
+      let hintText = `K线图 | 周期: ${chartState.intervalLabel} | 样本: ${windowPoints.length}/${all.length} | 窗口: ${formatTsMs(windowStart)} ~ ${formatTsMs(windowEnd)}`;
+
+      if (chartState.crosshairIndex !== null && chartState.crosshairIndex >= chartState.visibleStart && chartState.crosshairIndex <= chartState.visibleEnd) {
+        const selected = all[chartState.crosshairIndex];
+        const localIndex = chartState.crosshairIndex - chartState.visibleStart;
+        const x = left + localIndex * barGap + barGap / 2;
+        const y = toY(selected.close);
+        ctx.strokeStyle = "#334155";
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, height - bottom);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(width - right, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const canvasOffsetX = klineCanvas.offsetLeft;
+        const canvasOffsetY = klineCanvas.offsetTop;
+        const tooltipText = `开盘价: ${formatPrice(selected.open)}
+最高价: ${formatPrice(selected.high)}
+最低价: ${formatPrice(selected.low)}
+收盘价: ${formatPrice(selected.close)}`;
+        crosshairTooltip.textContent = tooltipText;
+        crosshairTooltip.style.display = "block";
+        const tooltipW = crosshairTooltip.offsetWidth;
+        const tooltipH = crosshairTooltip.offsetHeight;
+        const preferredLeft = canvasOffsetX + x + 12;
+        const maxLeft = canvasOffsetX + width - tooltipW - 6;
+        const minLeft = canvasOffsetX + 6;
+        const resolvedLeft = Math.min(Math.max(minLeft, preferredLeft), Math.max(minLeft, maxLeft));
+        const preferredTop = canvasOffsetY + y - tooltipH - 10;
+        const maxTop = canvasOffsetY + height - tooltipH - 6;
+        const minTop = canvasOffsetY + 6;
+        const resolvedTop = Math.min(Math.max(minTop, preferredTop), Math.max(minTop, maxTop));
+        crosshairTooltip.style.left = `${resolvedLeft}px`;
+        crosshairTooltip.style.top = `${resolvedTop}px`;
+
+        yAxisLabel.textContent = formatPrice(selected.close);
+        yAxisLabel.style.display = "block";
+        yAxisLabel.style.top = `${canvasOffsetY + y}px`;
+
+        const timeLabel = formatAxisLabel(selected.tsMs, chooseTimeAxisGranularity(Math.max(1, windowEnd - windowStart)));
+        ctx.font = "12px sans-serif";
+        const textWidth = ctx.measureText(timeLabel).width;
+        const padX = 7;
+        const boxW = textWidth + padX * 2;
+        const boxH = 18;
+        const boxX = Math.min(Math.max(left, x - boxW / 2), width - right - boxW);
+        const boxY = height - bottom + 8;
+        ctx.fillStyle = "#0f172a";
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+        ctx.strokeStyle = "#334155";
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.textAlign = "center";
+        ctx.fillText(timeLabel, boxX + boxW / 2, boxY + 13);
+        ctx.textAlign = "left";
+      } else {
+        hideCrosshairOverlays();
+      }
+
+      hint.textContent = hintText;
+      ctx.fillStyle = "#4a5f7f";
+      ctx.font = "12px sans-serif";
+      ctx.fillText(maxPrice.toFixed(2), 4, top + 10);
+      ctx.fillText(minPrice.toFixed(2), 4, top + drawHeight);
+    }
+
+    function chartXToIndex(clientX) {
+      if (!chartState.layout || !chartState.points.length) return null;
+      const rect = klineCanvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const {left, drawWidth, barGap} = chartState.layout;
+      const rightBound = left + drawWidth;
+      if (x < left || x > rightBound) return null;
+      const localIndex = Math.round((x - left - barGap / 2) / barGap);
+      const clampedLocal = Math.max(0, Math.min(chartState.visibleEnd - chartState.visibleStart, localIndex));
+      return chartState.visibleStart + clampedLocal;
+    }
+
+    function shiftVisibleWindow(delta) {
+      const total = chartState.points.length;
+      if (!total) return;
+      const size = chartState.visibleEnd - chartState.visibleStart;
+      const maxStart = Math.max(0, total - 1 - size);
+      const nextStart = Math.min(Math.max(0, chartState.visibleStart + delta), maxStart);
+      const nextEnd = nextStart + size;
+      applyWindowRange(nextStart, nextEnd);
+    }
+
+    function bindChartInteractions() {
+      klineCanvas.addEventListener("mousemove", (event) => {
+        const idx = chartXToIndex(event.clientX);
+        if (idx === null) return;
+        chartState.crosshairIndex = idx;
+        drawKlineChart();
+      });
+      klineCanvas.addEventListener("mousedown", () => {
+        klineCanvas.focus();
+      });
+      klineCanvas.addEventListener("keydown", (event) => {
+        if (!chartState.points.length) return;
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const delta = event.key === "ArrowLeft" ? -1 : 1;
+        if (chartState.crosshairIndex === null) {
+          chartState.crosshairIndex = chartState.visibleStart;
+        } else {
+          chartState.crosshairIndex = Math.max(0, Math.min(chartState.points.length - 1, chartState.crosshairIndex + delta));
+        }
+        if (chartState.crosshairIndex < chartState.visibleStart) shiftVisibleWindow(delta);
+        if (chartState.crosshairIndex > chartState.visibleEnd) shiftVisibleWindow(delta);
+        drawKlineChart();
+      });
+
+      const beginDrag = (dragType, event) => {
+        if (!chartState.points.length) return;
+        event.preventDefault();
+        chartState.dragType = dragType;
+        chartState.dragStartX = event.clientX;
+        chartState.dragStartVisibleStart = chartState.visibleStart;
+        chartState.dragStartVisibleEnd = chartState.visibleEnd;
+        windowSelection.classList.toggle("dragging", dragType === "move");
+      };
+      windowHandleLeft.addEventListener("mousedown", (event) => beginDrag("left", event));
+      windowHandleRight.addEventListener("mousedown", (event) => beginDrag("right", event));
+      windowSelection.addEventListener("mousedown", (event) => {
+        if (event.target === windowHandleLeft || event.target === windowHandleRight) return;
+        beginDrag("move", event);
+      });
+
+      document.addEventListener("mousemove", (event) => {
+        if (!chartState.dragType) return;
+        const total = chartState.points.length;
+        if (total < 2) return;
+        const sliderWidth = windowSlider.clientWidth;
+        if (sliderWidth <= 0) return;
+        const indexDelta = Math.round((event.clientX - chartState.dragStartX) / sliderWidth * (total - 1));
+        if (chartState.dragType === "left") {
+          const newStart = Math.min(chartState.dragStartVisibleEnd - 1, chartState.dragStartVisibleStart + indexDelta);
+          applyWindowRange(newStart, chartState.dragStartVisibleEnd);
+        } else if (chartState.dragType === "right") {
+          const newEnd = Math.max(chartState.dragStartVisibleStart + 1, chartState.dragStartVisibleEnd + indexDelta);
+          applyWindowRange(chartState.dragStartVisibleStart, newEnd);
+        } else {
+          const winSize = chartState.dragStartVisibleEnd - chartState.dragStartVisibleStart;
+          const maxStart = Math.max(0, total - 1 - winSize);
+          const movedStart = Math.min(Math.max(0, chartState.dragStartVisibleStart + indexDelta), maxStart);
+          applyWindowRange(movedStart, movedStart + winSize);
+        }
+      });
+      document.addEventListener("mouseup", () => {
+        if (!chartState.dragType) return;
+        chartState.dragType = null;
+        windowSelection.classList.remove("dragging");
+      });
+
+      windowSlider.addEventListener("keydown", (event) => {
+        if (!chartState.points.length) return;
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        shiftVisibleWindow(event.key === "ArrowLeft" ? -1 : 1);
+      });
+    }
+
     document.getElementById("startBtn").addEventListener("click", () => {
       startDownload().catch((err) => appendLog(`启动失败: ${err.message}`));
     });
@@ -299,9 +869,14 @@
     document.getElementById("previewBtn").addEventListener("click", () => {
       loadPreview().catch((err) => appendLog(`预览失败: ${err.message}`));
     });
+    window.addEventListener("resize", () => {
+      if (chartState.points.length) drawKlineChart();
+    });
 
+    bindChartInteractions();
     refreshTasks().catch(() => {});
     refreshSummary().catch(() => {});
+    loadPreview().catch(() => {});
   </script>
 </body>
 </html>

@@ -29,3 +29,5 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual([row["ts"] for row in rows], ["1704067200000", "1704067260000"])
             self.assertEqual(rows[0]["close"], "9")
+            self.assertEqual(rows[0]["local_time_cn"], "2024-01-01T08:00:00+0800")
+            self.assertEqual(rows[0]["trade_date_cn"], "2024-01-01")

@@ -35,7 +35,7 @@ class DownloaderTests(unittest.TestCase):
         )
 
         self.assertEqual([row["ts"] for row in rows], [1704067260000, 1704067320000])
-        self.assertEqual(client.calls, [None, "1704067320000"])
+        self.assertEqual(client.calls, ["1704067380000", "1704067320000"])
 
     def test_index_dataset_uses_index_instrument_id(self) -> None:
         self.assertEqual(resolve_request_instrument_id("index", "BTC-USDT-SWAP"), "BTC-USDT")

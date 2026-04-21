@@ -9,10 +9,21 @@ class CliTests(unittest.TestCase):
     def test_parser_supports_download_command(self) -> None:
         parser = build_parser()
         args = parser.parse_args(
-            ["download", "--start", "2024-01-01", "--end", "2024-01-02", "--datasets", "candles,mark"]
+            [
+                "download",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-02",
+                "--datasets",
+                "candles,mark",
+                "--input-timezone",
+                "Asia/Shanghai",
+            ]
         )
         self.assertEqual(args.command, "download")
         self.assertEqual(args.datasets, "candles,mark")
+        self.assertEqual(args.input_timezone, "Asia/Shanghai")
 
     def test_help_prints_download_subcommand(self) -> None:
         parser = build_parser()

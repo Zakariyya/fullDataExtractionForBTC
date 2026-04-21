@@ -103,8 +103,9 @@ class DownloadService:
         bar = request["bar"]
         base_url = request["base_url"]
         output = self.output_root / request["output_subdir"]
-        start_ms = parse_datetime_input(request["start"])
-        end_ms = parse_datetime_input(request["end"])
+        input_tz = request.get("input_timezone", "UTC")
+        start_ms = parse_datetime_input(request["start"], default_timezone=input_tz)
+        end_ms = parse_datetime_input(request["end"], default_timezone=input_tz)
 
         self._set_status(task, "running")
         self._emit(task, {"type": "task_started", "task_id": task.task_id})

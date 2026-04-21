@@ -8,6 +8,10 @@ class TimeParsingTests(unittest.TestCase):
     def test_parse_date_string_as_utc_midnight(self) -> None:
         self.assertEqual(parse_datetime_input("2026-04-20"), 1776643200000)
 
+    def test_parse_date_string_with_shanghai_timezone(self) -> None:
+        # 2026-04-01 00:00:00 Asia/Shanghai == 2026-03-31 16:00:00 UTC
+        self.assertEqual(parse_datetime_input("2026-04-01", default_timezone="Asia/Shanghai"), 1774972800000)
+
 
 class NormalizeCandleTests(unittest.TestCase):
     def test_normalize_trade_candle_row(self) -> None:

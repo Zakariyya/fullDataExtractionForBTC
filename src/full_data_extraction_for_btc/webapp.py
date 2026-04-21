@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,8 @@ from pydantic import BaseModel, Field
 from full_data_extraction_for_btc.query import build_data_summary, preview_dataset_rows
 from full_data_extraction_for_btc.service import DownloadService
 
+LOGGER = logging.getLogger("full_data_extraction_for_btc.webapp")
+
 
 class DownloadRequest(BaseModel):
     start: str
@@ -21,6 +24,7 @@ class DownloadRequest(BaseModel):
     datasets: list[str] = Field(default_factory=lambda: ["candles", "mark", "index", "funding"])
     instrument_id: str = "BTC-USDT-SWAP"
     bar: str = "1m"
+    input_timezone: str = "UTC"
     output_subdir: str = "data"
     base_url: str = "https://www.okx.com"
 
@@ -98,13 +102,31 @@ def create_app(output_root: Path) -> FastAPI:
         dataset: str,
         instrument_id: str = "BTC-USDT-SWAP",
         output_subdir: str = "data",
-        limit: int = 50,
+        limit: int = 200,
+        start: str | None = None,
+        end: str | None = None,
+        input_timezone: str = "Asia/Shanghai",
+        kline_interval: str = "raw",
     ) -> dict[str, Any]:
+        LOGGER.info(
+            "Preview request: dataset=%s instrument_id=%s start=%s end=%s input_timezone=%s kline_interval=%s limit=%s",
+            dataset,
+            instrument_id,
+            start,
+            end,
+            input_timezone,
+            kline_interval,
+            limit,
+        )
         rows = preview_dataset_rows(
             output_root=output_root / output_subdir,
             instrument_id=instrument_id,
             dataset_path=dataset,
-            limit=max(1, min(limit, 500)),
+            limit=max(1, min(limit, 5000)),
+            start=start,
+            end=end,
+            input_timezone=input_timezone,
+            kline_interval=kline_interval,
         )
         return {"rows": rows}
 

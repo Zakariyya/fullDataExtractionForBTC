@@ -13,6 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--datasets", default="candles,mark,index,funding")
     download.add_argument("--instrument-id", default="BTC-USDT-SWAP")
     download.add_argument("--bar", default="1m")
+    download.add_argument("--input-timezone", default="UTC", help="Timezone for naive date/datetime input, e.g. UTC or Asia/Shanghai.")
     download.add_argument("--output", default="data")
     download.add_argument("--base-url", default="https://www.okx.com")
 

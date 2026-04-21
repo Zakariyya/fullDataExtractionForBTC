@@ -57,7 +57,8 @@ def _collect_candle_rows(
     end_ms: int,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    after: str | None = None
+    # Use end_ms as the first cursor to avoid paging from latest market data.
+    after: str | None = str(end_ms)
     collected: dict[int, dict[str, Any]] = {}
     page_count = 0
 
@@ -105,7 +106,8 @@ def _collect_funding_rows(
     end_ms: int,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    after: str | None = None
+    # Use end_ms as the first cursor to avoid paging from latest market data.
+    after: str | None = str(end_ms)
     collected: dict[int, dict[str, Any]] = {}
     page_count = 0
 
