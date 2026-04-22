@@ -4,11 +4,22 @@ __pycache__/
 *.so
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+site/
+pip-wheel-metadata/
 
 # Virtual environments
 .venv/
 venv/
 env/
+.python-version
 
 # Local tooling/session artifacts
 .superpowers/
@@ -16,10 +27,16 @@ env/
 .codex
 *.log
 
-# Local runtime/output data
-data/
+# Runtime temp files (keep data/ tracked by design)
 /tmp/
+tmp/
+*.tmp
+*.temp
 
 # OS/editor files
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

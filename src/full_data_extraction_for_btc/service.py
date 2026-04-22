@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from full_data_extraction_for_btc.client import OkxPublicClient
 from full_data_extraction_for_btc.downloader import CANDLE_DATASETS, DATASET_TO_PATH, collect_dataset_rows
 from full_data_extraction_for_btc.storage import DatasetStorage
-from full_data_extraction_for_btc.timeutils import parse_datetime_input
+from full_data_extraction_for_btc.timeutils import parse_datetime_input, to_iso_utc
 
 
 @dataclass
@@ -124,7 +124,9 @@ class DownloadService:
             for dataset in datasets:
                 self._emit(task, {"type": "dataset_started", "dataset": dataset})
                 if dataset in CANDLE_DATASETS:
-                    rows: list[dict[str, Any]] = []
+                    rows_written_total = 0
+                    min_ts: int | None = None
+                    max_ts: int | None = None
                     for day_start_ms, day_end_ms in _iter_day_windows(
                         start_ms=start_ms,
                         end_ms=end_ms,
@@ -198,7 +200,21 @@ class DownloadService:
                             end_ms=day_end_ms,
                             on_progress=_on_day_progress,
                         )
-                        rows.extend(day_rows)
+
+                        day_summary = storage.write_rows(
+                            DATASET_TO_PATH[dataset],
+                            day_rows,
+                            primary_key="ts",
+                        )
+                        rows_written_total += day_summary["rows_written"]
+
+                        if day_rows:
+                            day_timestamps = [int(row["ts"]) for row in day_rows]
+                            day_min_ts = min(day_timestamps)
+                            day_max_ts = max(day_timestamps)
+                            min_ts = day_min_ts if min_ts is None else min(min_ts, day_min_ts)
+                            max_ts = day_max_ts if max_ts is None else max(max_ts, day_max_ts)
+
                         self._emit(
                             task,
                             {
@@ -208,6 +224,24 @@ class DownloadService:
                                 "day_start_ms": day_start_ms,
                                 "day_end_ms": day_end_ms,
                                 "rows_downloaded": len(day_rows),
+                                "rows_written": day_summary["rows_written"],
+                            },
+                        )
+
+                    summary = {
+                        "dataset": DATASET_TO_PATH[dataset],
+                        "rows_written": rows_written_total,
+                    }
+                    if min_ts is not None and max_ts is not None:
+                        storage.write_json(
+                            f"metadata/manifests/{DATASET_TO_PATH[dataset]}.json",
+                            {
+                                "dataset": DATASET_TO_PATH[dataset],
+                                "rows_in_batch": rows_written_total,
+                                "min_ts": min_ts,
+                                "max_ts": max_ts,
+                                "min_iso_time": to_iso_utc(min_ts),
+                                "max_iso_time": to_iso_utc(max_ts),
                             },
                         )
                 else:
@@ -222,11 +256,11 @@ class DownloadService:
                             task, {"type": "dataset_progress", "dataset": ds, **payload}
                         ),
                     )
-                summary = storage.write_rows(
-                    DATASET_TO_PATH[dataset],
-                    rows,
-                    primary_key="funding_time" if dataset == "funding" else "ts",
-                )
+                    summary = storage.write_rows(
+                        DATASET_TO_PATH[dataset],
+                        rows,
+                        primary_key="funding_time" if dataset == "funding" else "ts",
+                    )
                 summary["requested_dataset"] = dataset
                 if dataset == "funding":
                     summary["note"] = "OKX public funding-rate history is limited to the most recent 3 months."

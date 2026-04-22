@@ -52,6 +52,35 @@
       box-shadow: var(--shadow); padding: 16px; margin-bottom: 16px;
     }
     .card h2 { margin: 0 0 12px; font-size: 18px; }
+    .card-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .card-title-row h2 { margin: 0; }
+    .sse-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid #d7dfef;
+      background: #eef2ff;
+      color: #1e3a8a;
+      white-space: nowrap;
+    }
+    .sse-badge::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.85;
+    }
+    .sse-badge.connected { background: #e8fff4; border-color: #bbf7d0; color: #166534; }
+    .sse-badge.connecting { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .sse-badge.reconnecting { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
+    .sse-badge.idle { background: #f8fafc; border-color: #cbd5e1; color: #475569; }
+    .sse-badge.closed { background: #f1f5f9; border-color: #cbd5e1; color: #334155; }
+    .sse-badge.error { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
     .grid { display: grid; grid-template-columns: 130px 1fr; gap: 8px 10px; align-items: center; }
     .grid-wide { display: grid; grid-template-columns: 130px 1fr 130px 1fr; gap: 8px 10px; align-items: center; }
     label { color: var(--muted); font-size: 13px; font-weight: 600; }
@@ -256,7 +285,10 @@
       </div>
 
       <article class="card preview-full">
-        <h2>进度日志 (SSE)</h2>
+        <div class="card-title-row">
+          <h2>进度日志 (SSE)</h2>
+          <span class="sse-badge idle" id="sseStateBadge">未连接</span>
+        </div>
         <div class="logbox" id="logBox"></div>
       </article>
 
@@ -331,6 +363,10 @@
 
     let currentTaskId = null;
     let currentEventSource = null;
+    let sseReconnectTimer = null;
+    let sseWatchdogTimer = null;
+    let sseLastMessageAt = 0;
+    let taskPollingTimer = null;
     const chartState = {
       intervalLabel: "原始数据",
       points: [],
@@ -355,6 +391,13 @@
     const klineCanvas = document.getElementById("klineCanvas");
     const crosshairTooltip = document.getElementById("crosshairTooltip");
     const yAxisLabel = document.getElementById("yAxisLabel");
+    const sseStateBadge = document.getElementById("sseStateBadge");
+
+    function setSseState(state, label) {
+      if (!sseStateBadge) return;
+      sseStateBadge.className = `sse-badge ${state}`;
+      sseStateBadge.textContent = label;
+    }
 
     function renderLogBox() {
       const box = document.getElementById("logBox");
@@ -371,6 +414,43 @@
         sseLogState.lines = sseLogState.lines.slice(-1200);
       }
       renderLogBox();
+    }
+
+    function ensureTaskPolling() {
+      if (taskPollingTimer) return;
+      taskPollingTimer = window.setInterval(() => {
+        if (!currentTaskId) return;
+        refreshTasks().catch(() => {});
+      }, 5000);
+    }
+
+    function clearSseTimers() {
+      if (sseReconnectTimer) {
+        clearTimeout(sseReconnectTimer);
+        sseReconnectTimer = null;
+      }
+      if (sseWatchdogTimer) {
+        clearInterval(sseWatchdogTimer);
+        sseWatchdogTimer = null;
+      }
+    }
+
+    function closeCurrentEventSource() {
+      if (currentEventSource) {
+        currentEventSource.close();
+        currentEventSource = null;
+      }
+    }
+
+    function scheduleSseReconnect(taskId, reason) {
+      if (sseReconnectTimer || currentTaskId !== taskId) return;
+      setSseState("reconnecting", "重连中");
+      appendLog(`SSE 连接中断，2秒后重连（${reason}）`);
+      sseReconnectTimer = window.setTimeout(() => {
+        sseReconnectTimer = null;
+        if (currentTaskId !== taskId) return;
+        connectEvents(taskId, true);
+      }, 2000);
     }
 
     function upsertInlineLog(key, line) {
@@ -468,18 +548,51 @@
       document.getElementById("taskJson").textContent = JSON.stringify(task, null, 2);
     }
 
-    function connectEvents(taskId) {
-      if (currentEventSource) currentEventSource.close();
-      clearAllInlineLogs();
+    function connectEvents(taskId, isReconnect = false) {
+      closeCurrentEventSource();
+      clearSseTimers();
+      if (!isReconnect) clearAllInlineLogs();
+      setSseState("connecting", isReconnect ? "重连中" : "连接中");
+      sseLastMessageAt = Date.now();
       currentEventSource = new EventSource(`/api/tasks/${taskId}/events`);
+      if (isReconnect) appendLog(`SSE 已重连: ${taskId}`);
+      currentEventSource.onopen = () => {
+        setSseState("connected", "已连接");
+        sseLastMessageAt = Date.now();
+      };
       currentEventSource.onmessage = (event) => {
         const payload = JSON.parse(event.data);
+        sseLastMessageAt = Date.now();
+        if (payload.type === "heartbeat") {
+          setSseState("connected", "已连接");
+          return;
+        }
         handleSseLogPayload(payload);
-        refreshTasks().catch((err) => appendLog(`刷新任务失败: ${err.message}`));
+        if (payload.type === "task_completed" || payload.type === "task_failed" || payload.type === "stream_end" || payload.type === "task_missing") {
+          closeCurrentEventSource();
+          clearSseTimers();
+          if (payload.type === "task_completed") setSseState("closed", "任务完成");
+          if (payload.type === "task_failed") setSseState("error", "任务失败");
+          if (payload.type === "stream_end") setSseState("closed", "流结束");
+          if (payload.type === "task_missing") setSseState("error", "任务不存在");
+          refreshTasks().catch(() => {});
+          refreshSummary().catch(() => {});
+          refreshCoverage().catch(() => {});
+        }
       };
       currentEventSource.onerror = () => {
-        appendLog("事件流断开，5秒后可手动刷新任务状态。");
+        closeCurrentEventSource();
+        setSseState("reconnecting", "重连中");
+        scheduleSseReconnect(taskId, "onerror");
       };
+      sseWatchdogTimer = window.setInterval(() => {
+        if (!currentEventSource || currentTaskId !== taskId) return;
+        const idleMs = Date.now() - sseLastMessageAt;
+        if (idleMs <= 15_000) return;
+        closeCurrentEventSource();
+        setSseState("reconnecting", "重连中");
+        scheduleSseReconnect(taskId, `watchdog_idle_${Math.floor(idleMs / 1000)}s`);
+      }, 5000);
     }
 
     async function refreshSummary() {
@@ -1018,9 +1131,17 @@
     window.addEventListener("resize", () => {
       if (chartState.points.length) drawKlineChart();
     });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) return;
+      refreshTasks().catch(() => {});
+      if (currentTaskId && !currentEventSource) {
+        connectEvents(currentTaskId, true);
+      }
+    });
 
     bindChartInteractions();
     bindPreviewAutoReload();
+    ensureTaskPolling();
     refreshTasks().catch(() => {});
     refreshSummary().catch(() => {});
     refreshCoverage().catch(() => {});

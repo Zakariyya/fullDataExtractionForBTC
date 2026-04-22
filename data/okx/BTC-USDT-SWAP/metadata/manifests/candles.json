@@ -1,0 +1,8 @@
+{
+  "dataset": "candles",
+  "rows_in_batch": 1440,
+  "min_ts": 1766620800000,
+  "max_ts": 1766707140000,
+  "min_iso_time": "2025-12-25T00:00:00Z",
+  "max_iso_time": "2025-12-25T23:59:00Z"
+}
