@@ -29,6 +29,14 @@ class DownloadRequest(BaseModel):
     base_url: str = "https://www.okx.com"
 
 
+class RebuildIndexRequest(BaseModel):
+    datasets: list[str] = Field(default_factory=lambda: ["candles", "mark", "index"])
+    instrument_id: str = "BTC-USDT-SWAP"
+    bar: str = "1m"
+    input_timezone: str = "UTC"
+    output_subdir: str = "data"
+
+
 def create_app(output_root: Path) -> FastAPI:
     app = FastAPI(title="BTC Research Workbench")
     app.add_middleware(
@@ -51,6 +59,11 @@ def create_app(output_root: Path) -> FastAPI:
         task = service.start_download(request.model_dump())
         return {"task": task.as_dict()}
 
+    @app.post("/api/tasks/rebuild-index")
+    def start_rebuild_index(request: RebuildIndexRequest) -> dict[str, Any]:
+        task = service.start_rebuild_index(request.model_dump())
+        return {"task": task.as_dict()}
+
     @app.get("/api/tasks")
     def list_tasks() -> dict[str, Any]:
         return {"tasks": service.list_tasks()}
@@ -68,9 +81,8 @@ def create_app(output_root: Path) -> FastAPI:
             raise HTTPException(status_code=404, detail="task not found")
 
         def event_stream() -> Any:
-            history, index = service.iter_events(task_id, from_index)
-            for event in history:
-                yield f"data: {event}\n\n"
+            index = max(0, from_index)
+            last_heartbeat_at = time.time()
 
             while True:
                 task = service.get_task(task_id)
@@ -78,23 +90,42 @@ def create_app(output_root: Path) -> FastAPI:
                     yield "data: {\"type\":\"task_missing\"}\n\n"
                     break
 
-                item = service.pop_event(task_id, timeout_seconds=1.0)
-                if item is not None:
-                    yield f"data: {item}\n\n"
-                    index += 1
+                history, new_index = service.iter_events(task_id, index)
+                if history:
+                    for event in history:
+                        yield f"data: {event}\n\n"
+                    index = new_index
                     continue
 
                 if task.status in {"completed", "failed"}:
                     yield "data: {\"type\":\"stream_end\"}\n\n"
                     break
 
-                yield f"data: {json.dumps({'type': 'heartbeat', 'ts': time.time()}, ensure_ascii=True)}\n\n"
+                now = time.time()
+                if now - last_heartbeat_at >= 1.0:
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'ts': now}, ensure_ascii=True)}\n\n"
+                    last_heartbeat_at = now
+                time.sleep(0.2)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.get("/api/data/summary")
-    def data_summary(instrument_id: str = "BTC-USDT-SWAP", output_subdir: str = "data") -> dict[str, Any]:
-        summary = build_data_summary(output_root / output_subdir, instrument_id=instrument_id)
+    def data_summary(
+        instrument_id: str = "BTC-USDT-SWAP",
+        output_subdir: str = "data",
+        start: str | None = None,
+        end: str | None = None,
+        timezone_name: str = "UTC",
+        bar: str = "1m",
+    ) -> dict[str, Any]:
+        summary = build_data_summary(
+            output_root / output_subdir,
+            instrument_id=instrument_id,
+            start=start,
+            end=end,
+            timezone_name=timezone_name,
+            bar=bar,
+        )
         return {"summary": summary}
 
     @app.get("/api/data/coverage")
@@ -102,13 +133,71 @@ def create_app(output_root: Path) -> FastAPI:
         instrument_id: str = "BTC-USDT-SWAP",
         output_subdir: str = "data",
         timezone_name: str = "Asia/Shanghai",
+        datasets: str | None = None,
     ) -> dict[str, Any]:
+        dataset_filter: set[str] | None = None
+        if datasets:
+            dataset_filter = {item.strip() for item in datasets.split(",") if item.strip()}
         coverage = build_data_coverage(
             output_root / output_subdir,
             instrument_id=instrument_id,
             timezone_name=timezone_name,
+            dataset_names=dataset_filter,
         )
-        return {"coverage": coverage}
+        return {"coverage": coverage, "requested_datasets": sorted(dataset_filter) if dataset_filter else None}
+
+    @app.get("/api/data/coverage/stream")
+    def stream_data_coverage(
+        instrument_id: str = "BTC-USDT-SWAP",
+        output_subdir: str = "data",
+        timezone_name: str = "Asia/Shanghai",
+        datasets: str | None = None,
+    ) -> StreamingResponse:
+        def event_stream() -> Any:
+            base = output_root / output_subdir / "okx" / instrument_id
+            if datasets:
+                requested = [item.strip() for item in datasets.split(",") if item.strip()]
+            elif base.exists():
+                requested = sorted(
+                    dataset_dir.name for dataset_dir in base.glob("*") if dataset_dir.is_dir() and dataset_dir.name != "metadata"
+                )
+            else:
+                requested = []
+
+            yield f"data: {json.dumps({'type': 'coverage_started', 'requested_datasets': requested, 'timezone': timezone_name}, ensure_ascii=True)}\n\n"
+
+            merged_datasets: dict[str, Any] = {}
+            total = len(requested)
+            done = 0
+            for dataset_name in requested:
+                coverage = build_data_coverage(
+                    output_root / output_subdir,
+                    instrument_id=instrument_id,
+                    timezone_name=timezone_name,
+                    dataset_names={dataset_name},
+                )
+                datasets_payload = coverage.get("datasets", {})
+                if dataset_name in datasets_payload:
+                    merged_datasets[dataset_name] = datasets_payload[dataset_name]
+                done += 1
+                yield (
+                    f"data: {json.dumps({'type': 'coverage_chunk', 'dataset': dataset_name, 'done': done, 'total': total, 'coverage': coverage}, ensure_ascii=True)}\n\n"
+                )
+
+            final_payload = {
+                "type": "coverage_completed",
+                "coverage": {
+                    "base_path": str(output_root / output_subdir / "okx" / instrument_id),
+                    "exists": (output_root / output_subdir / "okx" / instrument_id).exists(),
+                    "timezone": timezone_name,
+                    "datasets": merged_datasets,
+                },
+                "done": done,
+                "total": total,
+            }
+            yield f"data: {json.dumps(final_payload, ensure_ascii=True)}\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.get("/api/data/preview")
     def data_preview(

@@ -56,25 +56,40 @@ class InlineConsole:
 
 
 class InlineAwareStreamHandler(logging.Handler):
-    def __init__(self, console: InlineConsole) -> None:
+    def __init__(self, console: InlineConsole, inline_logger_prefixes: tuple[str, ...] = ()) -> None:
         super().__init__()
         self._console = console
+        self._inline_logger_prefixes = inline_logger_prefixes
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             message = self.format(record)
-            self._console.line(message)
+            if self._should_inline(record):
+                self._console.inline(message)
+            else:
+                self._console.line(message)
         except Exception:  # noqa: BLE001
             self.handleError(record)
 
+    def _should_inline(self, record: logging.LogRecord) -> bool:
+        if record.levelno > logging.INFO:
+            return False
+        if not self._inline_logger_prefixes:
+            return False
+        return any(record.name.startswith(prefix) for prefix in self._inline_logger_prefixes)
 
-def configure_terminal_logging(level: int = logging.INFO) -> InlineConsole:
-    console = InlineConsole()
+
+def configure_terminal_logging(
+    level: int = logging.INFO,
+    force_line_interval_seconds: float = 1.0,
+    inline_logger_prefixes: tuple[str, ...] = (),
+) -> InlineConsole:
+    console = InlineConsole(force_line_interval_seconds=force_line_interval_seconds)
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(level)
 
-    handler = InlineAwareStreamHandler(console)
+    handler = InlineAwareStreamHandler(console, inline_logger_prefixes=inline_logger_prefixes)
     handler.setLevel(level)
     handler.setFormatter(
         logging.Formatter(

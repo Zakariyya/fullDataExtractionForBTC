@@ -5,7 +5,6 @@ import logging
 import threading
 import time
 from pathlib import Path
-import sys
 
 import uvicorn
 
@@ -50,8 +49,15 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     if args.command == "serve":
+        console = configure_terminal_logging(
+            level=logging.INFO,
+            force_line_interval_seconds=3600.0,
+            inline_logger_prefixes=(
+                "full_data_extraction_for_btc.service",
+                "full_data_extraction_for_btc.client",
+            ),
+        )
         app = create_app(Path(args.output_root))
-        console = InlineConsole(stream=sys.stdout, force_line_interval_seconds=3600.0)
         _print_serve_startup_guide(console, host=args.host, port=args.port)
         stop_event = _start_serve_alive_indicator(console, host=args.host, port=args.port)
         try:
@@ -69,7 +75,14 @@ def main() -> int:
     if args.command != "download":
         parser.error(f"unsupported command: {args.command}")
 
-    console = configure_terminal_logging(level=logging.INFO)
+    console = configure_terminal_logging(
+        level=logging.INFO,
+        force_line_interval_seconds=3600.0,
+        inline_logger_prefixes=(
+            "full_data_extraction_for_btc.service",
+            "full_data_extraction_for_btc.client",
+        ),
+    )
     start_ms = parse_datetime_input(args.start, default_timezone=args.input_timezone)
     end_ms = parse_datetime_input(args.end, default_timezone=args.input_timezone)
     client = OkxPublicClient(base_url=args.base_url)

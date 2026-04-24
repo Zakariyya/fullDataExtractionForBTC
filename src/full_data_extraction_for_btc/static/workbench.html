@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BTC 回测数据工作台</title>
+  <title>BTC 永续数据控制台</title>
   <style>
     :root {
       --bg-0: #f4f7fb;
@@ -26,7 +26,7 @@
         radial-gradient(circle at 0% 0%, rgba(15, 118, 110, 0.16), transparent 34%),
         radial-gradient(circle at 100% 100%, rgba(15, 118, 110, 0.12), transparent 32%),
         linear-gradient(165deg, var(--bg-0), var(--bg-1));
-      font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      font-family: "MiSans", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
       min-height: 100vh;
       padding: 24px;
     }
@@ -38,6 +38,14 @@
     }
     .header h1 { margin: 0; font-size: 28px; }
     .sub { margin-top: 8px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .tip-list {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: #365073;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .tip-list li { margin: 2px 0; }
 
     .layout {
       display: grid;
@@ -88,7 +96,53 @@
       width: 100%; border: 1px solid var(--line); border-radius: 10px;
       padding: 10px; font-size: 14px; color: var(--text); background: #fff;
     }
+    .dataset-picker {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+    }
+    .dataset-cards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .dataset-card {
+      border: 1px solid #d6deee;
+      border-radius: 10px;
+      background: #f8fbff;
+      color: #1e3552;
+      text-align: left;
+      padding: 8px 10px;
+      font-size: 13px;
+      line-height: 1.35;
+      cursor: pointer;
+    }
+    .dataset-card:hover { filter: brightness(0.98); transform: none; }
+    .dataset-card.active {
+      border-color: #0f766e;
+      background: #eafbf8;
+      box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.25);
+    }
+    .dataset-card .title { font-weight: 700; display: block; }
+    .dataset-card .desc { color: #516782; font-size: 12px; }
+    .dataset-hint {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
     .actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .readonly-field {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 14px;
+      color: #1f3554;
+      background: #f6f9ff;
+      font-weight: 700;
+    }
     button {
       border: none; border-radius: 10px; padding: 9px 14px; font-weight: 700; cursor: pointer;
       transition: transform 140ms ease, filter 140ms ease;
@@ -105,12 +159,454 @@
       overflow-wrap: anywhere;
     }
     .meta { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+    .meta-desc {
+      color: #465e7f;
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 4px 0 10px;
+    }
 
     .json {
       border: 1px solid #d7dfef; border-radius: 10px; padding: 10px; background: #f9fbff;
       max-height: 280px; overflow: auto; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
       font-size: 12px; line-height: 1.5;
       white-space: pre-wrap;
+    }
+    .json-details summary {
+      cursor: pointer;
+      color: #325477;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      user-select: none;
+    }
+    .task-status-pills {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .task-pill {
+      border: 1px solid #d7dfef;
+      border-radius: 9px;
+      background: #f7faff;
+      color: #4d6280;
+      padding: 6px 8px;
+      font-size: 12px;
+      text-align: center;
+      font-weight: 700;
+    }
+    .task-pill.active {
+      border-color: #0f766e;
+      background: #eafbf8;
+      color: #0f4f49;
+      box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.2);
+    }
+    .task-pill.failed {
+      border-color: #b91c1c;
+      background: #fff1f2;
+      color: #991b1b;
+    }
+    .task-progress {
+      height: 10px;
+      border-radius: 999px;
+      border: 1px solid #d1ddee;
+      background: #edf3ff;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .task-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #0f766e 0%, #14b8a6 100%);
+      transition: width 220ms ease;
+    }
+    .task-progress-fill.failed {
+      background: linear-gradient(90deg, #dc2626 0%, #fb7185 100%);
+    }
+    .task-kpis {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .task-kpi {
+      border: 1px solid #d7dfef;
+      border-radius: 8px;
+      background: #fbfdff;
+      padding: 8px;
+    }
+    .task-kpi .name {
+      color: #5a6b86;
+      font-size: 11px;
+      margin-bottom: 2px;
+    }
+    .task-kpi .value {
+      color: #1f3552;
+      font-size: 13px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .quality-overview {
+      border: 1px solid #d7dfef;
+      border-radius: 10px;
+      background: #f8fbff;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .quality-overview .title {
+      color: #29486f;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .quality-overview .sub {
+      color: #5a7395;
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    .quality-badge {
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 800;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .quality-badge.good {
+      color: #166534;
+      background: #ecfdf3;
+      border-color: #86efac;
+    }
+    .quality-badge.warn {
+      color: #9a3412;
+      background: #fff7ed;
+      border-color: #fdba74;
+    }
+    .quality-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .quality-card {
+      border: 1px solid #d7dfef;
+      border-radius: 10px;
+      background: #ffffff;
+      padding: 10px;
+    }
+    .quality-card .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      gap: 8px;
+    }
+    .quality-card .name {
+      color: #22466d;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .quality-pill {
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 800;
+      border: 1px solid transparent;
+    }
+    .quality-pill.good {
+      color: #166534;
+      background: #ecfdf3;
+      border-color: #86efac;
+    }
+    .quality-pill.warn {
+      color: #9a3412;
+      background: #fff7ed;
+      border-color: #fdba74;
+    }
+    .quality-kv {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      color: #4a6285;
+      font-size: 12px;
+      line-height: 1.45;
+      margin-bottom: 6px;
+    }
+    .quality-kv strong {
+      color: #1f3f62;
+      font-weight: 700;
+    }
+    .quality-advice {
+      font-size: 12px;
+      color: #26476f;
+      background: #f3f8ff;
+      border: 1px solid #dae6f8;
+      border-radius: 8px;
+      padding: 6px 8px;
+    }
+    .board-meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .board-progress-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .board-progress-track {
+      position: relative;
+      height: 12px;
+      border-radius: 999px;
+      border: 1px solid #c7d7ec;
+      background: linear-gradient(180deg, #f5f9ff 0%, #eaf2ff 100%);
+      overflow: hidden;
+    }
+    .board-progress-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #0f766e 0%, #14b8a6 40%, #22d3ee 100%);
+      transition: width 180ms linear;
+    }
+    .board-progress-fill.running {
+      background-image:
+        repeating-linear-gradient(
+          -45deg,
+          rgba(255, 255, 255, 0.14) 0,
+          rgba(255, 255, 255, 0.14) 8px,
+          rgba(255, 255, 255, 0.02) 8px,
+          rgba(255, 255, 255, 0.02) 16px
+        ),
+        linear-gradient(90deg, #0f766e 0%, #14b8a6 45%, #22d3ee 100%);
+      animation: board-stripes 1.1s linear infinite;
+    }
+    .board-progress-fill.done {
+      background: linear-gradient(90deg, #16a34a 0%, #22c55e 100%);
+    }
+    .board-progress-text {
+      min-width: 56px;
+      text-align: right;
+      font-weight: 700;
+      color: #0f3b38;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .board-eta {
+      color: #4d6280;
+      font-size: 12px;
+      margin-bottom: 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    @keyframes board-stripes {
+      from { background-position: 0 0, 0 0; }
+      to { background-position: 32px 0, 0 0; }
+    }
+    .board-lanes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .board-lane {
+      border: 1px solid #d7dfef;
+      border-radius: 10px;
+      background: #fff;
+      padding: 10px;
+      min-height: 110px;
+    }
+    .board-lane h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: #274867;
+    }
+    .board-items {
+      max-height: 220px;
+      overflow: auto;
+      display: grid;
+      gap: 6px;
+    }
+    .board-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1px solid #e4ebf7;
+      border-radius: 8px;
+      padding: 7px 8px;
+      background: #fbfdff;
+      font-size: 12px;
+    }
+    .board-item .left {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: #1f3552;
+      font-weight: 700;
+    }
+    .board-item .right {
+      color: #526883;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .status-light {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04);
+      flex: 0 0 auto;
+    }
+    .status-light.running {
+      background: #f59e0b;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+    }
+    .status-light.done {
+      background: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+    }
+    .status-light.error {
+      background: #ef4444;
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
+    }
+    .status-light.pending {
+      background: #94a3b8;
+      box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.2);
+    }
+    .board-empty {
+      color: #6580a4;
+      font-size: 12px;
+      padding: 8px 2px;
+    }
+    .done-details > summary {
+      cursor: pointer;
+      color: #325477;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      user-select: none;
+    }
+    .range-input-wrap {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .range-input-wrap button {
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #1f4069;
+      background: #ebf2ff;
+      border: 1px solid #d2deef;
+    }
+    .range-picker-pop {
+      position: fixed;
+      z-index: 2000;
+      width: min(560px, calc(100vw - 16px));
+      box-sizing: border-box;
+      background: #ffffff;
+      border: 1px solid #d7dfef;
+      border-radius: 10px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+      padding: 10px;
+      overflow: hidden;
+    }
+    .range-picker-pop[hidden] { display: none; }
+    .range-picker-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      color: #375273;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .range-picker-nav {
+      border: 1px solid #d2deef;
+      background: #f4f8ff;
+      color: #33527b;
+      border-radius: 6px;
+      width: 28px;
+      height: 28px;
+      cursor: pointer;
+    }
+    .range-picker-months {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .range-picker-month h4 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: #284a71;
+      text-align: center;
+    }
+    .range-picker-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 2px;
+      font-size: 11px;
+    }
+    .range-picker-grid .week {
+      color: #6a809e;
+      text-align: center;
+      padding: 2px 0;
+    }
+    .range-picker-day {
+      border: none;
+      background: transparent;
+      border-radius: 6px;
+      height: 28px;
+      cursor: pointer;
+      color: #233f63;
+      font-size: 12px;
+    }
+    .range-picker-day.muted {
+      color: #9db0c8;
+    }
+    .range-picker-day.in-range {
+      background: #e7f1ff;
+      color: #1d4e86;
+    }
+    .range-picker-day.edge {
+      background: #2563eb;
+      color: #ffffff;
+      font-weight: 700;
+    }
+    .range-picker-footer {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #e4ebf7;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #476288;
+    }
+    .range-picker-footer .actions {
+      display: flex;
+      gap: 6px;
+    }
+    .range-picker-footer button {
+      border: 1px solid #d2deef;
+      background: #f4f8ff;
+      color: #2d507c;
+      border-radius: 6px;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .range-picker-footer button.primary {
+      background: #2563eb;
+      border-color: #2563eb;
+      color: #ffffff;
     }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { border-bottom: 1px solid #e6ebf5; text-align: left; padding: 8px; white-space: nowrap; }
@@ -214,18 +710,36 @@
 
     @media (max-width: 1280px) {
       .grid-wide { grid-template-columns: 130px 1fr; }
+      .range-picker-pop { width: 520px; }
     }
     @media (max-width: 1100px) {
       .layout { grid-template-columns: 1fr; }
       .preview-full { grid-column: auto; }
+      .range-picker-pop {
+        width: min(96vw, 560px);
+      }
+      .range-picker-months {
+        grid-template-columns: 1fr;
+      }
+      .quality-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
   <div class="container">
     <section class="header">
-      <h1>BTC 回测数据工作台</h1>
+      <h1>BTC 永续数据控制台</h1>
       <div class="sub">左侧下载任务，右侧摘要，底部全宽预览。支持按日期范围查看全量数据，并可聚合为多周期 K 线。</div>
+      <ul class="tip-list">
+        <li>📂 输出根目录：输出目录/okx/BTC-USDT-SWAP/...（例如 data/okx/BTC-USDT-SWAP/...）</li>
+        <li>📈 candles：成交价 OHLCV，策略主信号常用。</li>
+        <li>🛡️ mark_price_candles：标记价，适合合约风控与强平风险评估。</li>
+        <li>🌍 index_candles：指数价，适合做偏离/价差过滤。</li>
+        <li>💸 funding_rates：资金费率，适合持仓成本建模（公共接口仅近 3 个月）。</li>
+        <li>🧾 metadata：元数据与日/月连续性索引，用于跳过已完整数据与覆盖追踪。</li>
+      </ul>
     </section>
 
     <section class="layout">
@@ -234,25 +748,69 @@
           <h2>任务控制</h2>
           <div class="grid">
             <label for="instrument">交易对</label>
-            <input id="instrument" value="BTC-USDT-SWAP">
+            <select id="instrument">
+              <option value="BTC-USDT-SWAP" selected>BTC-USDT-SWAP</option>
+              <option value="ETH-USDT-SWAP">ETH-USDT-SWAP</option>
+              <option value="SOL-USDT-SWAP">SOL-USDT-SWAP</option>
+              <option value="XRP-USDT-SWAP">XRP-USDT-SWAP</option>
+              <option value="DOGE-USDT-SWAP">DOGE-USDT-SWAP</option>
+              <option value="ADA-USDT-SWAP">ADA-USDT-SWAP</option>
+              <option value="LTC-USDT-SWAP">LTC-USDT-SWAP</option>
+              <option value="BCH-USDT-SWAP">BCH-USDT-SWAP</option>
+              <option value="TRX-USDT-SWAP">TRX-USDT-SWAP</option>
+              <option value="AVAX-USDT-SWAP">AVAX-USDT-SWAP</option>
+              <option value="LINK-USDT-SWAP">LINK-USDT-SWAP</option>
+              <option value="DOT-USDT-SWAP">DOT-USDT-SWAP</option>
+              <option value="TON-USDT-SWAP">TON-USDT-SWAP</option>
+              <option value="SHIB-USDT-SWAP">SHIB-USDT-SWAP</option>
+              <option value="SUI-USDT-SWAP">SUI-USDT-SWAP</option>
+              <option value="ARB-USDT-SWAP">ARB-USDT-SWAP</option>
+              <option value="OP-USDT-SWAP">OP-USDT-SWAP</option>
+              <option value="PEPE-USDT-SWAP">PEPE-USDT-SWAP</option>
+              <option value="WIF-USDT-SWAP">WIF-USDT-SWAP</option>
+              <option value="NEAR-USDT-SWAP">NEAR-USDT-SWAP</option>
+            </select>
 
             <label for="start">开始时间</label>
-            <input id="start" type="date" value="2026-04-01">
+            <input id="start" type="date">
 
             <label for="end">结束时间</label>
-            <input id="end" type="date" value="2026-04-02">
+            <input id="end" type="date">
 
-            <label for="inputTimezone">输入时区</label>
-            <input id="inputTimezone" value="UTC">
+            <label>输入时区</label>
+            <div class="readonly-field" id="inputTimezoneDisplay">-</div>
+            <input id="inputTimezone" type="hidden" value="UTC">
 
-            <label for="datasets">数据集</label>
-            <input id="datasets" value="candles,mark,index,funding">
+            <label>数据集（多选）</label>
+            <div class="dataset-picker">
+              <div class="dataset-cards" id="datasetCards">
+                <button type="button" class="dataset-card active" data-dataset="candles">
+                  <span class="title">📈 candles</span>
+                  <span class="desc">成交价 OHLCV，策略主输入</span>
+                </button>
+                <button type="button" class="dataset-card active" data-dataset="mark">
+                  <span class="title">🛡️ mark</span>
+                  <span class="desc">标记价，风控/强平视角</span>
+                </button>
+                <button type="button" class="dataset-card active" data-dataset="index">
+                  <span class="title">🌍 index</span>
+                  <span class="desc">指数价，偏离与价差过滤</span>
+                </button>
+                <button type="button" class="dataset-card active" data-dataset="funding">
+                  <span class="title">💸 funding</span>
+                  <span class="desc">资金费率，持仓成本建模</span>
+                </button>
+              </div>
+              <div class="dataset-hint" id="datasetHint">已选 4 项：candles, mark, index, funding</div>
+            </div>
 
-            <label for="outputSubdir">输出目录</label>
-            <input id="outputSubdir" value="data">
+            <label>输出目录</label>
+            <div class="readonly-field" id="outputSubdirDisplay">data</div>
+            <input id="outputSubdir" type="hidden" value="data">
           </div>
           <div class="actions">
             <button class="btn-primary" id="startBtn">启动下载</button>
+            <button class="btn-ghost" id="rebuildIndexBtn">重建索引</button>
             <button class="btn-ghost" id="refreshTasksBtn">刷新任务列表</button>
           </div>
         </article>
@@ -260,7 +818,22 @@
         <article class="card">
           <h2>任务状态</h2>
           <div class="meta" id="taskMeta">当前无任务</div>
-          <div class="json" id="taskJson">{}</div>
+          <div class="task-status-pills" id="taskStatusPills">
+            <div class="task-pill" data-stage="created">已创建</div>
+            <div class="task-pill" data-stage="running">执行中</div>
+            <div class="task-pill" data-stage="completed">已完成</div>
+            <div class="task-pill" data-stage="failed">失败</div>
+          </div>
+          <div class="task-progress"><div class="task-progress-fill" id="taskProgressFill"></div></div>
+          <div class="task-kpis" id="taskKpis">
+            <div class="task-kpi"><div class="name">任务ID</div><div class="value" id="taskKpiId">-</div></div>
+            <div class="task-kpi"><div class="name">状态</div><div class="value" id="taskKpiStatus">-</div></div>
+            <div class="task-kpi"><div class="name">数据集</div><div class="value" id="taskKpiDatasets">-</div></div>
+          </div>
+          <details class="json-details">
+            <summary>查看原始 JSON</summary>
+            <div class="json" id="taskJson">{}</div>
+          </details>
         </article>
 
       </div>
@@ -268,19 +841,35 @@
       <div>
         <article class="card">
           <h2>数据质量摘要</h2>
+          <div class="meta-desc">用于快速确认每个数据集的总行数、时间戳范围与批次信息，判断数据是否满足策略回测前置质量要求。</div>
           <div class="actions">
             <button class="btn-ghost" id="refreshSummaryBtn">刷新摘要</button>
           </div>
-          <div class="json" id="summaryJson">{}</div>
+          <div class="quality-overview">
+            <div>
+              <div class="title" id="summaryOverviewTitle">数据就绪度</div>
+              <div class="sub" id="summaryOverviewSub">点击“刷新摘要”后展示</div>
+            </div>
+            <div class="quality-badge warn" id="summaryOverviewBadge">待检查</div>
+          </div>
+          <div class="quality-grid" id="summaryBoard"></div>
+          <details class="json-details">
+            <summary>查看原始 JSON</summary>
+            <div class="json" id="summaryJson">{}</div>
+          </details>
         </article>
 
         <article class="card">
           <h2>数据覆盖日期看板</h2>
+          <div class="meta-desc">大数据量下加载较慢，改为按需刷新，不再自动触发。</div>
           <div class="actions">
+            <button class="btn-ghost" id="toggleCoverageBtn">展开覆盖看板</button>
             <button class="btn-ghost" id="refreshCoverageBtn">刷新看板</button>
           </div>
-          <div class="meta" id="coverageMeta">等待加载...</div>
-          <div class="json" id="coverageJson">{}</div>
+          <div id="coverageContent" style="display:none;">
+            <div class="meta" id="coverageMeta">未加载（点击“刷新看板”）</div>
+            <div class="json" id="coverageJson">{}</div>
+          </div>
         </article>
       </div>
 
@@ -290,6 +879,30 @@
           <span class="sse-badge idle" id="sseStateBadge">未连接</span>
         </div>
         <div class="logbox" id="logBox"></div>
+      </article>
+
+      <article class="card preview-full">
+        <h2>下载进度看板（按日 × 数据集）</h2>
+        <div class="board-meta" id="downloadBoardMeta">等待任务开始...</div>
+        <div class="board-progress-row">
+          <div class="board-progress-track">
+            <div class="board-progress-fill" id="downloadBoardProgressFill"></div>
+          </div>
+          <div class="board-progress-text" id="downloadBoardProgressText">0.0%</div>
+        </div>
+        <div class="board-eta" id="downloadBoardEta">预计剩余：--</div>
+        <div class="board-lanes">
+          <div class="board-lane">
+            <h3>🟡 下载中</h3>
+            <div class="board-items" id="downloadRunningList"></div>
+          </div>
+          <div class="board-lane">
+            <details class="done-details" id="downloadDoneDetails">
+              <summary>🟢 下载完毕（0）</summary>
+              <div class="board-items" id="downloadDoneList"></div>
+            </details>
+          </div>
+        </div>
       </article>
 
       <article class="card preview-full">
@@ -306,11 +919,37 @@
           <label for="previewLimit">返回行数</label>
           <input id="previewLimit" value="500">
 
-          <label for="previewStart">开始时间</label>
-          <input id="previewStart" type="date" value="2026-04-01">
-
-          <label for="previewEnd">结束时间</label>
-          <input id="previewEnd" type="date" value="2026-04-02">
+          <label for="previewDateRange">时间范围</label>
+          <div class="range-input-wrap">
+            <input id="previewDateRange" readonly>
+            <button type="button" id="pickPreviewRangeBtn">选择范围</button>
+          </div>
+          <div class="range-picker-pop" id="rangePickerPop" hidden>
+            <div class="range-picker-toolbar">
+              <button type="button" class="range-picker-nav" id="rangePickerPrev">‹</button>
+              <span id="rangePickerTitle">范围选择</span>
+              <button type="button" class="range-picker-nav" id="rangePickerNext">›</button>
+            </div>
+            <div class="range-picker-months">
+              <div class="range-picker-month">
+                <h4 id="rangePickerMonthLeft">-</h4>
+                <div class="range-picker-grid" id="rangePickerGridLeft"></div>
+              </div>
+              <div class="range-picker-month">
+                <h4 id="rangePickerMonthRight">-</h4>
+                <div class="range-picker-grid" id="rangePickerGridRight"></div>
+              </div>
+            </div>
+            <div class="range-picker-footer">
+              <span id="rangePickerSelected">未选择范围</span>
+              <div class="actions">
+                <button type="button" id="rangePickerClear">清除</button>
+                <button type="button" class="primary" id="rangePickerApply">确定</button>
+              </div>
+            </div>
+          </div>
+          <input id="previewStart" type="date" hidden>
+          <input id="previewEnd" type="date" hidden>
 
           <label for="previewTimezone">查询时区</label>
           <input id="previewTimezone" value="Asia/Shanghai">
@@ -355,18 +994,29 @@
   <script>
     const api = {
       startDownload: "/api/tasks/download",
+      startRebuildIndex: "/api/tasks/rebuild-index",
       listTasks: "/api/tasks",
       summary: "/api/data/summary",
       coverage: "/api/data/coverage",
+      coverageStream: "/api/data/coverage/stream",
       preview: "/api/data/preview",
     };
+    const datasetToPath = {
+      candles: "candles",
+      mark: "mark_price_candles",
+      index: "index_candles",
+      funding: "funding_rates",
+    };
+    const dayBasedDatasets = new Set(["candles", "mark", "index"]);
 
     let currentTaskId = null;
     let currentEventSource = null;
     let sseReconnectTimer = null;
     let sseWatchdogTimer = null;
     let sseLastMessageAt = 0;
+    let sseEventIndex = 0;
     let taskPollingTimer = null;
+    let coverageEventSource = null;
     const chartState = {
       intervalLabel: "原始数据",
       points: [],
@@ -392,6 +1042,57 @@
     const crosshairTooltip = document.getElementById("crosshairTooltip");
     const yAxisLabel = document.getElementById("yAxisLabel");
     const sseStateBadge = document.getElementById("sseStateBadge");
+    const datasetCardsRoot = document.getElementById("datasetCards");
+    const datasetHint = document.getElementById("datasetHint");
+    const downloadBoardMeta = document.getElementById("downloadBoardMeta");
+    const downloadRunningList = document.getElementById("downloadRunningList");
+    const downloadDoneList = document.getElementById("downloadDoneList");
+    const downloadDoneDetails = document.getElementById("downloadDoneDetails");
+    const downloadBoardProgressFill = document.getElementById("downloadBoardProgressFill");
+    const downloadBoardProgressText = document.getElementById("downloadBoardProgressText");
+    const downloadBoardEta = document.getElementById("downloadBoardEta");
+    const inputTimezoneDisplay = document.getElementById("inputTimezoneDisplay");
+    const inputTimezoneHidden = document.getElementById("inputTimezone");
+    const outputSubdirDisplay = document.getElementById("outputSubdirDisplay");
+    const outputSubdirHidden = document.getElementById("outputSubdir");
+    const coverageContent = document.getElementById("coverageContent");
+    const toggleCoverageBtn = document.getElementById("toggleCoverageBtn");
+    const refreshCoverageBtn = document.getElementById("refreshCoverageBtn");
+    const previewDateRange = document.getElementById("previewDateRange");
+    const pickPreviewRangeBtn = document.getElementById("pickPreviewRangeBtn");
+    const rangePickerPop = document.getElementById("rangePickerPop");
+    const rangePickerPrev = document.getElementById("rangePickerPrev");
+    const rangePickerNext = document.getElementById("rangePickerNext");
+    const rangePickerTitle = document.getElementById("rangePickerTitle");
+    const rangePickerMonthLeft = document.getElementById("rangePickerMonthLeft");
+    const rangePickerMonthRight = document.getElementById("rangePickerMonthRight");
+    const rangePickerGridLeft = document.getElementById("rangePickerGridLeft");
+    const rangePickerGridRight = document.getElementById("rangePickerGridRight");
+    const rangePickerSelected = document.getElementById("rangePickerSelected");
+    const rangePickerClear = document.getElementById("rangePickerClear");
+    const rangePickerApply = document.getElementById("rangePickerApply");
+    const previewStartInput = document.getElementById("previewStart");
+    const previewEndInput = document.getElementById("previewEnd");
+    const taskProgressFill = document.getElementById("taskProgressFill");
+
+    const downloadBoardState = {
+      datasets: ["candles", "mark", "index", "funding"],
+      days: new Map(),
+      datasetLevel: new Map(),
+      startedAtMs: 0,
+      plannedDayCount: 0,
+      plannedTotalUnits: 0,
+      progressSamples: [],
+    };
+    let coverageLoaded = false;
+    let coverageRefreshing = false;
+    const rangePickerState = {
+      open: false,
+      viewYear: 0,
+      viewMonth: 0,
+      tempStart: "",
+      tempEnd: "",
+    };
 
     function setSseState(state, label) {
       if (!sseStateBadge) return;
@@ -414,6 +1115,657 @@
         sseLogState.lines = sseLogState.lines.slice(-1200);
       }
       renderLogBox();
+    }
+
+    function closeCoverageEventSource() {
+      if (!coverageEventSource) return;
+      coverageEventSource.close();
+      coverageEventSource = null;
+    }
+
+    function setCoverageRefreshingState(refreshing) {
+      coverageRefreshing = Boolean(refreshing);
+      if (!refreshCoverageBtn) return;
+      refreshCoverageBtn.disabled = coverageRefreshing;
+      refreshCoverageBtn.textContent = coverageRefreshing ? "刷新中..." : "刷新看板";
+    }
+
+    function getSelectedDatasets() {
+      if (!datasetCardsRoot) return ["candles", "mark", "index", "funding"];
+      const selected = [];
+      datasetCardsRoot.querySelectorAll(".dataset-card.active").forEach((el) => {
+        const value = el.getAttribute("data-dataset");
+        if (value) selected.push(value);
+      });
+      return selected;
+    }
+
+    function updateDatasetHint() {
+      if (!datasetHint) return;
+      const selected = getSelectedDatasets();
+      datasetHint.textContent = `已选 ${selected.length} 项：${selected.join(", ") || "-"}`;
+    }
+
+    function bindDatasetPicker() {
+      if (!datasetCardsRoot) return;
+      datasetCardsRoot.querySelectorAll(".dataset-card").forEach((card) => {
+        card.addEventListener("click", () => {
+          const activeCards = datasetCardsRoot.querySelectorAll(".dataset-card.active");
+          const isActive = card.classList.contains("active");
+          if (isActive && activeCards.length <= 1) {
+            appendLog("至少需要选择 1 个数据集");
+            return;
+          }
+          card.classList.toggle("active");
+          updateDatasetHint();
+        });
+      });
+      updateDatasetHint();
+    }
+
+    function initDisplayOnlyFields() {
+      const tz = "UTC";
+      if (inputTimezoneDisplay) inputTimezoneDisplay.textContent = tz;
+      if (inputTimezoneHidden) inputTimezoneHidden.value = tz;
+      if (outputSubdirDisplay && outputSubdirHidden) {
+        outputSubdirDisplay.textContent = outputSubdirHidden.value || "data";
+      }
+    }
+
+    function formatDateOnlyFromDate(date) {
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    }
+
+    function parseDateOnly(value) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return null;
+      const dt = new Date(`${value}T00:00:00`);
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    }
+
+    function shiftMonth(year, month, delta) {
+      const total = year * 12 + month + delta;
+      const nextYear = Math.floor(total / 12);
+      const nextMonth = total % 12;
+      return {year: nextYear, month: nextMonth};
+    }
+
+    function compareDateKeys(a, b) {
+      return String(a || "").localeCompare(String(b || ""));
+    }
+
+    function initDefaultDateRange() {
+      const today = new Date();
+      const endDate = formatDateOnlyFromDate(today);
+      const startEl = document.getElementById("start");
+      const endEl = document.getElementById("end");
+      if (endEl && !endEl.value) endEl.value = endDate;
+      if (startEl && !startEl.value) {
+        const anchor = endEl && endEl.value ? new Date(`${endEl.value}T00:00:00`) : new Date(today.getTime());
+        anchor.setDate(anchor.getDate() - 3);
+        startEl.value = formatDateOnlyFromDate(anchor);
+      }
+
+      if (previewStartInput && !previewStartInput.value) previewStartInput.value = startEl ? startEl.value : "";
+      if (previewEndInput && !previewEndInput.value) previewEndInput.value = endDate;
+      syncPreviewRangeInput();
+    }
+
+    function syncPreviewRangeInput() {
+      if (!previewDateRange || !previewStartInput || !previewEndInput) return;
+      const start = previewStartInput.value;
+      const end = previewEndInput.value;
+      previewDateRange.value = start && end ? `${start} ~ ${end}` : "";
+    }
+
+    function updateRangePickerSelectedText() {
+      if (!rangePickerSelected) return;
+      const start = rangePickerState.tempStart;
+      const end = rangePickerState.tempEnd;
+      if (start && end) {
+        rangePickerSelected.textContent = `${start} ~ ${end}`;
+        return;
+      }
+      if (start) {
+        rangePickerSelected.textContent = `${start} ~ （待选择结束）`;
+        return;
+      }
+      rangePickerSelected.textContent = "未选择范围";
+    }
+
+    function renderRangeMonth(gridEl, titleEl, year, month) {
+      if (!gridEl || !titleEl) return;
+      const weekNames = ["日", "一", "二", "三", "四", "五", "六"];
+      const monthLabel = `${year}年${String(month + 1).padStart(2, "0")}月`;
+      titleEl.textContent = monthLabel;
+
+      const firstDay = new Date(year, month, 1);
+      const startWeekday = firstDay.getDay();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const prevMonthDays = new Date(year, month, 0).getDate();
+      const todayKey = formatDateOnlyFromDate(new Date());
+      const startKey = rangePickerState.tempStart || "";
+      const endKey = rangePickerState.tempEnd || "";
+
+      const cells = [];
+      weekNames.forEach((name) => {
+        cells.push(`<div class="week">${name}</div>`);
+      });
+
+      const buildCell = (dateKey, label, muted) => {
+        let cls = "range-picker-day";
+        if (muted) cls += " muted";
+        const inRange = startKey && endKey && compareDateKeys(dateKey, startKey) >= 0 && compareDateKeys(dateKey, endKey) <= 0;
+        if (inRange) cls += " in-range";
+        if (dateKey === startKey || dateKey === endKey) cls += " edge";
+        if (dateKey === todayKey) cls += " today";
+        return `<button type="button" class="${cls}" data-date-key="${dateKey}">${label}</button>`;
+      };
+
+      for (let i = 0; i < startWeekday; i += 1) {
+        const day = prevMonthDays - startWeekday + i + 1;
+        const prev = shiftMonth(year, month, -1);
+        const key = `${prev.year}-${String(prev.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        cells.push(buildCell(key, day, true));
+      }
+      for (let day = 1; day <= daysInMonth; day += 1) {
+        const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        cells.push(buildCell(key, day, false));
+      }
+      while ((cells.length - 7) % 7 !== 0) {
+        const idx = (cells.length - 7) % 7;
+        const day = idx + 1;
+        const next = shiftMonth(year, month, 1);
+        const key = `${next.year}-${String(next.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        cells.push(buildCell(key, day, true));
+      }
+      gridEl.innerHTML = cells.join("");
+    }
+
+    function renderRangePicker() {
+      if (!rangePickerPop) return;
+      const left = {year: rangePickerState.viewYear, month: rangePickerState.viewMonth};
+      const right = shiftMonth(left.year, left.month, 1);
+      renderRangeMonth(rangePickerGridLeft, rangePickerMonthLeft, left.year, left.month);
+      renderRangeMonth(rangePickerGridRight, rangePickerMonthRight, right.year, right.month);
+      if (rangePickerTitle) rangePickerTitle.textContent = `${left.year}年${left.month + 1}月 ~ ${right.year}年${right.month + 1}月`;
+      updateRangePickerSelectedText();
+    }
+
+    function openRangePicker() {
+      if (!rangePickerPop || !pickPreviewRangeBtn) return;
+      const anchorDate = parseDateOnly(previewStartInput ? previewStartInput.value : "") || new Date();
+      rangePickerState.viewYear = anchorDate.getFullYear();
+      rangePickerState.viewMonth = anchorDate.getMonth();
+      rangePickerState.tempStart = previewStartInput ? previewStartInput.value : "";
+      rangePickerState.tempEnd = previewEndInput ? previewEndInput.value : "";
+      renderRangePicker();
+      const rect = pickPreviewRangeBtn.getBoundingClientRect();
+      const popupWidth = Math.min(560, Math.max(320, window.innerWidth - 16));
+      rangePickerPop.style.width = `${popupWidth}px`;
+      const maxLeft = Math.max(8, window.innerWidth - popupWidth - 8);
+      const left = Math.max(8, Math.min(rect.left, maxLeft));
+      rangePickerPop.style.left = `${left}px`;
+      rangePickerPop.style.top = `${rect.bottom + 8}px`;
+      rangePickerPop.hidden = false;
+      rangePickerState.open = true;
+    }
+
+    function closeRangePicker() {
+      if (!rangePickerPop) return;
+      rangePickerPop.hidden = true;
+      rangePickerState.open = false;
+    }
+
+    function applyRangePickerSelection() {
+      if (!previewStartInput || !previewEndInput) return;
+      const start = rangePickerState.tempStart || "";
+      const end = rangePickerState.tempEnd || "";
+      previewStartInput.value = start;
+      previewEndInput.value = end;
+      syncPreviewRangeInput();
+      closeRangePicker();
+      loadPreview().catch((err) => appendLog(`预览失败: ${err.message}`));
+    }
+
+    function selectRangeDate(dateKey) {
+      const start = rangePickerState.tempStart || "";
+      const end = rangePickerState.tempEnd || "";
+      if (!start || (start && end)) {
+        rangePickerState.tempStart = dateKey;
+        rangePickerState.tempEnd = "";
+        renderRangePicker();
+        return;
+      }
+      if (compareDateKeys(dateKey, start) < 0) {
+        rangePickerState.tempEnd = start;
+        rangePickerState.tempStart = dateKey;
+      } else {
+        rangePickerState.tempEnd = dateKey;
+      }
+      renderRangePicker();
+    }
+
+    function bindPreviewRangePicker() {
+      if (!pickPreviewRangeBtn || !previewStartInput || !previewEndInput || !rangePickerPop) return;
+      pickPreviewRangeBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (rangePickerState.open) {
+          closeRangePicker();
+          return;
+        }
+        openRangePicker();
+      });
+      if (previewDateRange) {
+        previewDateRange.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (rangePickerState.open) {
+            closeRangePicker();
+            return;
+          }
+          openRangePicker();
+        });
+      }
+      rangePickerPrev.addEventListener("click", () => {
+        const next = shiftMonth(rangePickerState.viewYear, rangePickerState.viewMonth, -1);
+        rangePickerState.viewYear = next.year;
+        rangePickerState.viewMonth = next.month;
+        renderRangePicker();
+      });
+      rangePickerNext.addEventListener("click", () => {
+        const next = shiftMonth(rangePickerState.viewYear, rangePickerState.viewMonth, 1);
+        rangePickerState.viewYear = next.year;
+        rangePickerState.viewMonth = next.month;
+        renderRangePicker();
+      });
+      rangePickerPop.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const dateKey = target.getAttribute("data-date-key");
+        if (dateKey) {
+          selectRangeDate(dateKey);
+          return;
+        }
+      });
+      rangePickerClear.addEventListener("click", () => {
+        rangePickerState.tempStart = "";
+        rangePickerState.tempEnd = "";
+        renderRangePicker();
+      });
+      rangePickerApply.addEventListener("click", () => {
+        applyRangePickerSelection();
+      });
+      document.addEventListener("click", (event) => {
+        if (!rangePickerState.open) return;
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        if (rangePickerPop.contains(target) || pickPreviewRangeBtn.contains(target) || (previewDateRange && previewDateRange.contains(target))) {
+          return;
+        }
+        closeRangePicker();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && rangePickerState.open) closeRangePicker();
+      });
+    }
+
+    function estimatePlannedDayCount(startRaw, endRaw) {
+      const startText = String(startRaw || "").slice(0, 10);
+      const endText = String(endRaw || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startText) || !/^\d{4}-\d{2}-\d{2}$/.test(endText)) return null;
+      const startMs = Date.parse(`${startText}T00:00:00Z`);
+      const endMs = Date.parse(`${endText}T00:00:00Z`);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+      const days = Math.floor((endMs - startMs) / 86400000);
+      return days > 0 ? days : null;
+    }
+
+    function buildPlannedDayKeys(startRaw, endRaw) {
+      const startText = String(startRaw || "").slice(0, 10);
+      const endText = String(endRaw || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startText) || !/^\d{4}-\d{2}-\d{2}$/.test(endText)) return [];
+      const start = parseDateOnly(startText);
+      const end = parseDateOnly(endText);
+      if (!start || !end) return [];
+      if (end.getTime() <= start.getTime()) return [];
+      const keys = [];
+      const cursor = new Date(end.getTime());
+      cursor.setDate(cursor.getDate() - 1);
+      while (cursor.getTime() >= start.getTime()) {
+        keys.push(formatDateOnlyFromDate(cursor));
+        cursor.setDate(cursor.getDate() - 1);
+      }
+      return keys;
+    }
+
+    function formatEta(seconds) {
+      if (!Number.isFinite(seconds) || seconds < 0) return "--";
+      const sec = Math.max(0, Math.round(seconds));
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      if (h > 0) return `${h}小时${m}分${s}秒`;
+      if (m > 0) return `${m}分${s}秒`;
+      return `${s}秒`;
+    }
+
+    function updateTaskVisual(task) {
+      const status = String(task?.status || "").toLowerCase();
+      const pills = document.querySelectorAll("#taskStatusPills .task-pill");
+      pills.forEach((pill) => {
+        const stage = pill.getAttribute("data-stage");
+        pill.classList.remove("active", "failed");
+        if (!stage) return;
+        if (status === "failed" && stage === "failed") {
+          pill.classList.add("active", "failed");
+          return;
+        }
+        if (status === "completed" && stage === "completed") {
+          pill.classList.add("active");
+          return;
+        }
+        if (status === "running" && stage === "running") {
+          pill.classList.add("active");
+          return;
+        }
+        if ((status === "pending" || status === "created") && stage === "created") {
+          pill.classList.add("active");
+        }
+      });
+
+      if (taskProgressFill) {
+        let pct = 0;
+        if (status === "running") pct = 55;
+        if (status === "completed") pct = 100;
+        if (status === "failed") pct = 100;
+        taskProgressFill.style.width = `${pct}%`;
+        taskProgressFill.classList.toggle("failed", status === "failed");
+      }
+
+      const request = task?.request || {};
+      const datasets = Array.isArray(request.datasets) ? request.datasets : [];
+      const setText = (id, value) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = value || "-";
+      };
+      setText("taskKpiId", task?.task_id || "-");
+      setText("taskKpiStatus", status || "-");
+      setText("taskKpiDatasets", datasets.length ? `${datasets.length}个` : "-");
+    }
+
+    function calcBoardProgressSummary() {
+      const datasets = downloadBoardState.datasets;
+      const days = Array.from(downloadBoardState.days.keys()).sort();
+      const dayDatasets = datasets.filter((ds) => dayBasedDatasets.has(ds));
+      const rangeDatasets = datasets.filter((ds) => !dayBasedDatasets.has(ds));
+      const fallbackTotal = days.length * dayDatasets.length + rangeDatasets.length;
+      let totalUnits = downloadBoardState.plannedTotalUnits > 0 ? downloadBoardState.plannedTotalUnits : fallbackTotal;
+      let completedCells = 0;
+      let runningCells = 0;
+      let progressUnits = 0;
+
+      days.forEach((day) => {
+        const dayMap = downloadBoardState.days.get(day) || new Map();
+        dayDatasets.forEach((ds) => {
+          const cell = dayMap.get(ds);
+          if (!cell) return;
+          if (cell.status === "done" || cell.status === "skipped") {
+            completedCells += 1;
+            progressUnits += 1;
+            return;
+          }
+          if (cell.status === "running") {
+            runningCells += 1;
+            const pct = Number(cell.progressPct || 0);
+            if (Number.isFinite(pct) && pct > 0) {
+              progressUnits += Math.max(0, Math.min(1, pct / 100));
+            }
+            return;
+          }
+          if (cell.status === "checking") {
+            runningCells += 1;
+          }
+        });
+      });
+
+      rangeDatasets.forEach((ds) => {
+        const cell = downloadBoardState.datasetLevel.get(ds);
+        if (!cell) return;
+        if (cell.status === "done" || cell.status === "skipped") {
+          completedCells += 1;
+          progressUnits += 1;
+          return;
+        }
+        if (cell.status === "running" || cell.status === "checking" || cell.status === "error") {
+          runningCells += 1;
+        }
+      });
+
+      if (totalUnits <= 0) totalUnits = Math.max(0, fallbackTotal);
+      if (progressUnits > totalUnits) totalUnits = progressUnits;
+      const progressPct = totalUnits > 0 ? (progressUnits * 100.0) / totalUnits : 0;
+      return {days, dayDatasets, rangeDatasets, totalUnits, completedCells, runningCells, progressUnits, progressPct};
+    }
+
+    function pushProgressSample(progressUnits, totalUnits) {
+      if (downloadBoardState.startedAtMs <= 0) return;
+      if (!Number.isFinite(totalUnits) || totalUnits <= 0) return;
+      const now = Date.now();
+      const last = downloadBoardState.progressSamples[downloadBoardState.progressSamples.length - 1];
+      if (last && now - last.atMs < 1000 && Math.abs(progressUnits - last.units) < 0.005) return;
+      downloadBoardState.progressSamples.push({atMs: now, units: progressUnits});
+      if (downloadBoardState.progressSamples.length > 300) {
+        downloadBoardState.progressSamples = downloadBoardState.progressSamples.slice(-300);
+      }
+    }
+
+    function estimateRemainingSeconds(progressUnits, totalUnits) {
+      if (!Number.isFinite(progressUnits) || !Number.isFinite(totalUnits)) return null;
+      if (progressUnits <= 0 || progressUnits >= totalUnits) return null;
+      const samples = downloadBoardState.progressSamples;
+      if (!samples.length) return null;
+      const now = Date.now();
+      let ref = null;
+      for (let i = samples.length - 1; i >= 0; i -= 1) {
+        const sample = samples[i];
+        if (sample.units >= progressUnits) continue;
+        if (now - sample.atMs >= 10000) {
+          ref = sample;
+          break;
+        }
+      }
+      if (!ref) {
+        ref = samples.find((sample) => sample.units < progressUnits) || null;
+      }
+      if (!ref) return null;
+      const elapsedSec = (now - ref.atMs) / 1000;
+      if (elapsedSec <= 0) return null;
+      const speed = (progressUnits - ref.units) / elapsedSec;
+      if (!Number.isFinite(speed) || speed <= 0) return null;
+      return (totalUnits - progressUnits) / speed;
+    }
+
+    function resetDownloadBoard(datasets, options = {}) {
+      downloadBoardState.datasets = Array.from(new Set((datasets || []).filter(Boolean)));
+      if (!downloadBoardState.datasets.length) {
+        downloadBoardState.datasets = ["candles", "mark", "index", "funding"];
+      }
+      downloadBoardState.days = new Map();
+      downloadBoardState.datasetLevel = new Map();
+      downloadBoardState.startedAtMs = Date.now();
+      const plannedDayCount = Number(options.plannedDayCount || 0);
+      const plannedDays = Array.isArray(options.plannedDays) ? options.plannedDays.filter(Boolean) : [];
+      downloadBoardState.plannedDayCount = plannedDayCount > 0 ? plannedDayCount : 0;
+      const dayDatasetCount = downloadBoardState.datasets.filter((ds) => dayBasedDatasets.has(ds)).length;
+      const rangeDatasetCount = downloadBoardState.datasets.filter((ds) => !dayBasedDatasets.has(ds)).length;
+      downloadBoardState.plannedTotalUnits = downloadBoardState.plannedDayCount * dayDatasetCount + rangeDatasetCount;
+      if (plannedDays.length) {
+        plannedDays.forEach((day) => {
+          const dayMap = new Map();
+          downloadBoardState.datasets.forEach((ds) => {
+            if (dayBasedDatasets.has(ds)) {
+              dayMap.set(ds, {status: "pending"});
+            }
+          });
+          downloadBoardState.days.set(day, dayMap);
+        });
+      }
+      downloadBoardState.datasets.forEach((ds) => {
+        if (!dayBasedDatasets.has(ds)) {
+          downloadBoardState.datasetLevel.set(ds, {status: "pending"});
+        }
+      });
+      downloadBoardState.progressSamples = [];
+      renderDownloadBoard();
+    }
+
+    function ensureBoardDataset(dataset) {
+      if (!dataset) return;
+      if (downloadBoardState.datasets.includes(dataset)) return;
+      downloadBoardState.datasets.push(dataset);
+    }
+
+    function setBoardCell(day, dataset, status, extra = {}) {
+      if (!day || !dataset) return;
+      ensureBoardDataset(dataset);
+      if (!downloadBoardState.days.has(day)) {
+        downloadBoardState.days.set(day, new Map());
+      }
+      const dayMap = downloadBoardState.days.get(day);
+      dayMap.set(dataset, {status, ...extra});
+      renderDownloadBoard();
+    }
+
+    function setDatasetLevelCell(dataset, status, extra = {}) {
+      if (!dataset) return;
+      ensureBoardDataset(dataset);
+      downloadBoardState.datasetLevel.set(dataset, {status, ...extra});
+      renderDownloadBoard();
+    }
+
+    function statusText(cell) {
+      if (!cell) return "⚪ 未开始";
+      if (cell.status === "running") {
+        if (Number.isFinite(cell.progressPct)) {
+          return `🟡 下载中 ${cell.progressPct.toFixed(1)}%`;
+        }
+        return "🟡 下载中";
+      }
+      if (cell.status === "checking") return "🟡 校验中";
+      if (cell.status === "pending") return "⚪ 待处理";
+      if (cell.status === "done") return `🟢 完成 (${cell.rows || 0})`;
+      if (cell.status === "skipped") return "🔵 跳过";
+      if (cell.status === "error") return "🔴 异常";
+      return "⚪ 未开始";
+    }
+
+    function renderDownloadBoard() {
+      const summary = calcBoardProgressSummary();
+      const {days, dayDatasets, rangeDatasets, totalUnits, completedCells, runningCells, progressUnits, progressPct} = summary;
+      pushProgressSample(progressUnits, totalUnits);
+      const etaSeconds = estimateRemainingSeconds(progressUnits, totalUnits);
+
+      const runningItems = [];
+      const doneItems = [];
+      days.forEach((day) => {
+        const dayMap = downloadBoardState.days.get(day) || new Map();
+        dayDatasets.forEach((dataset) => {
+          const cell = dayMap.get(dataset);
+          if (!cell) return;
+          const item = {day, dataset, cell};
+          if (cell.status === "running" || cell.status === "checking" || cell.status === "error" || cell.status === "pending") runningItems.push(item);
+          if (cell.status === "done" || cell.status === "skipped") doneItems.push(item);
+        });
+      });
+      rangeDatasets.forEach((dataset) => {
+        const cell = downloadBoardState.datasetLevel.get(dataset);
+        if (!cell) return;
+        const item = {day: "区间", dataset, cell};
+        if (cell.status === "running" || cell.status === "checking" || cell.status === "error" || cell.status === "pending") runningItems.push(item);
+        if (cell.status === "done" || cell.status === "skipped") doneItems.push(item);
+      });
+
+      runningItems.sort((a, b) => `${b.day}-${b.dataset}`.localeCompare(`${a.day}-${a.dataset}`));
+      doneItems.sort((a, b) => `${a.day}-${a.dataset}`.localeCompare(`${b.day}-${b.dataset}`));
+
+      if (downloadRunningList) {
+        if (!runningItems.length) {
+          downloadRunningList.innerHTML = `<div class="board-empty">当前没有进行中的下载项</div>`;
+        } else {
+          downloadRunningList.innerHTML = runningItems.map((item) => {
+            const pct = Number(item.cell.progressPct || 0);
+            const desc = item.cell.status === "error"
+              ? "异常"
+              : item.cell.status === "pending"
+                ? "待处理"
+              : item.cell.status === "checking"
+                ? "校验中"
+                : `${Number.isFinite(pct) ? pct.toFixed(1) : "0.0"}%`;
+            const lightClass = item.cell.status === "error" ? "error" : (item.cell.status === "pending" ? "pending" : "running");
+            return `<div class="board-item">
+              <span class="left"><span class="status-light ${lightClass}"></span>${item.day} · ${item.dataset}</span>
+              <span class="right">${desc}</span>
+            </div>`;
+          }).join("");
+        }
+      }
+
+      if (downloadDoneList) {
+        if (!doneItems.length) {
+          downloadDoneList.innerHTML = `<div class="board-empty">暂无完成项</div>`;
+        } else {
+          downloadDoneList.innerHTML = doneItems.map((item) => {
+            const rows = Number(item.cell.rows || 0);
+            const desc = item.cell.status === "skipped" ? "已跳过" : `rows=${rows}`;
+            return `<div class="board-item">
+              <span class="left"><span class="status-light done"></span>${item.day} · ${item.dataset}</span>
+              <span class="right">${desc}</span>
+            </div>`;
+          }).join("");
+        }
+      }
+      if (downloadDoneDetails) {
+        const summaryEl = downloadDoneDetails.querySelector("summary");
+        if (summaryEl) summaryEl.textContent = `🟢 下载完毕（${doneItems.length}）`;
+      }
+
+      if (downloadBoardProgressFill) {
+        downloadBoardProgressFill.style.width = `${Math.max(0, Math.min(100, progressPct)).toFixed(2)}%`;
+        downloadBoardProgressFill.classList.toggle("running", progressPct > 0 && progressPct < 100);
+        downloadBoardProgressFill.classList.toggle("done", progressPct >= 100);
+      }
+      if (downloadBoardProgressText) {
+        downloadBoardProgressText.textContent = `${Math.max(0, Math.min(100, progressPct)).toFixed(1)}%`;
+      }
+      if (downloadBoardEta) {
+        if (progressPct >= 100 && totalUnits > 0) {
+          downloadBoardEta.textContent = "预计剩余：0秒（已完成）";
+        } else if (etaSeconds == null) {
+          downloadBoardEta.textContent = downloadBoardState.plannedDayCount > 0 ? "预计剩余：计算中..." : "预计剩余：--";
+        } else {
+          downloadBoardEta.textContent = `预计剩余：${formatEta(etaSeconds)}`;
+        }
+      }
+
+      if (downloadBoardMeta) {
+        if (!days.length) {
+          if (downloadBoardState.plannedDayCount > 0) {
+            const plannedTotal = Math.round(totalUnits);
+            downloadBoardMeta.textContent = `计划 ${downloadBoardState.plannedDayCount} 天（日频）+ ${rangeDatasets.length} 区间集 | 完成 0/${plannedTotal} | 进行中 0`;
+          } else {
+            downloadBoardMeta.textContent = `已跟踪 0 天 | 数据集 ${dayDatasets.length + rangeDatasets.length} 个`;
+          }
+        } else {
+          const plannedText = downloadBoardState.plannedDayCount > 0
+            ? `计划 ${downloadBoardState.plannedDayCount} 天（日频）+ ${rangeDatasets.length} 区间集`
+            : `已跟踪 ${days.length} 天 × ${dayDatasets.length} 日频集 + ${rangeDatasets.length} 区间集`;
+          const finishedUnits = Math.floor(completedCells);
+          const totalUnitsText = Math.round(totalUnits);
+          downloadBoardMeta.textContent = `${plannedText} | 完成 ${finishedUnits}/${totalUnitsText} | 进行中 ${runningCells}`;
+        }
+      }
     }
 
     function ensureTaskPolling() {
@@ -488,39 +1840,149 @@
       const day = payload.day || "-";
       const key = `${dataset}:${day}`;
       if (payload.type === "dataset_day_started") {
+        setBoardCell(day, dataset, "running", {progressPct: 0});
         appendLog(`[${dataset}] ${day} 开始下载 | 总分钟数=${payload.total_minutes || 0}`);
         return;
       }
+      if (payload.type === "dataset_started") {
+        if (!dayBasedDatasets.has(dataset)) {
+          setDatasetLevelCell(dataset, "running");
+        }
+        return;
+      }
+      if (payload.type === "dataset_day_checking") {
+        setBoardCell(day, dataset, "checking");
+        return;
+      }
       if (payload.type === "dataset_day_progress") {
+        const pct = Number(payload.progress_pct || 0);
+        setBoardCell(day, dataset, "running", {progressPct: Number.isFinite(pct) ? pct : 0});
         upsertInlineLog(key, formatProgressLog(payload));
         return;
       }
       if (payload.type === "dataset_day_finished") {
+        setBoardCell(day, dataset, "done", {rows: Number(payload.rows_downloaded || 0)});
         clearInlineLog(key);
         appendLog(`[${dataset}] ${day} 下载完成 | rows=${payload.rows_downloaded || 0}`);
         return;
       }
       if (payload.type === "dataset_day_skipped") {
+        setBoardCell(day, dataset, "skipped");
         clearInlineLog(key);
-        appendLog(`[${dataset}] ${day} 本地时间连续，已存在，跳过下载`);
+        const reason = payload.reason || "unknown";
+        if (reason === "month_index_hit") {
+          appendLog(`[${dataset}] ${day} 月索引命中，跳过下载`);
+        } else if (reason === "day_index_hit") {
+          appendLog(`[${dataset}] ${day} 索引命中，跳过下载`);
+        } else {
+          appendLog(`[${dataset}] ${day} 本地时间连续，已存在，跳过下载`);
+        }
+        return;
+      }
+      if (payload.type === "dataset_month_skipped") {
+        const hitDays = Array.isArray(payload.days) ? payload.days : [];
+        hitDays.forEach((d) => {
+          setBoardCell(d, dataset, "skipped");
+          clearInlineLog(`${dataset}:${d}`);
+        });
+        appendLog(`[${dataset}] ${payload.month || "-"} 月索引命中，整月跳过下载 | days=${payload.days_count || hitDays.length}`);
+        return;
+      }
+      if (payload.type === "dataset_day_index_added") {
+        appendLog(`[${dataset}] ${day} 已写入连续性索引 | source=${payload.source || "-"}`);
+        return;
+      }
+      if (payload.type === "dataset_progress") {
+        if (!dayBasedDatasets.has(dataset)) {
+          setDatasetLevelCell(dataset, "running");
+        }
+        return;
+      }
+      if (payload.type === "dataset_finished") {
+        if (!dayBasedDatasets.has(dataset)) {
+          setDatasetLevelCell(dataset, "done", {rows: Number(payload.rows_written || 0)});
+        }
+        return;
+      }
+      if (payload.type === "dataset_parallel_started") {
+        appendLog(`[${dataset}] 跨月并行下载开启 | months=${payload.months || 0} workers=${payload.workers || 0}`);
+        return;
+      }
+      if (payload.type === "dataset_parallel_month_started") {
+        appendLog(`[${dataset}] 月任务开始 | month=${payload.month || "-"} days=${payload.days || 0}`);
+        return;
+      }
+      if (payload.type === "dataset_parallel_month_finished") {
+        appendLog(`[${dataset}] 月任务完成 | month=${payload.month || "-"} days=${payload.days || 0}`);
+        return;
+      }
+      if (payload.type === "dataset_month_index_added") {
+        appendLog(`[${dataset}] ${payload.month || "-"} 已写入月连续性索引 | source=${payload.source || "-"}`);
+        return;
+      }
+      if (payload.type === "dataset_index_saved") {
+        appendLog(`[${dataset}] 索引已保存 | indexed_days=${payload.indexed_days || 0} indexed_months=${payload.indexed_months || 0} bar=${payload.bar || "-"} tz=${payload.timezone || "-"}`);
+        return;
+      }
+      if (payload.type === "index_rebuild_started") {
+        appendLog(`索引重建开始`);
+        return;
+      }
+      if (payload.type === "index_rebuild_dataset_started") {
+        appendLog(`[${dataset}] 索引重建开始`);
+        return;
+      }
+      if (payload.type === "index_rebuild_day_checked") {
+        const status = payload.is_continuous ? "连续" : "不连续";
+        upsertInlineLog(`rebuild:${dataset}`, `[${dataset}] 索引重建进度 ${payload.day} ${status} | scanned=${payload.scanned_days || 0} indexed=${payload.indexed_days || 0}`);
+        return;
+      }
+      if (payload.type === "index_rebuild_dataset_finished") {
+        clearInlineLog(`rebuild:${dataset}`);
+        appendLog(`[${dataset}] 索引重建完成 | indexed_days=${payload.indexed_days || 0} indexed_months=${payload.indexed_months || 0} scanned_days=${payload.scanned_days || 0}`);
+        return;
+      }
+      if (payload.type === "index_rebuild_dataset_skipped") {
+        appendLog(`[${dataset}] 索引重建跳过 | reason=${payload.reason || "-"}`);
+        return;
+      }
+      if (payload.type === "index_rebuild_finished") {
+        clearAllInlineLogs();
+        appendLog(`索引重建完成`);
         return;
       }
       if (payload.type === "task_completed" || payload.type === "task_failed" || payload.type === "stream_end" || payload.type === "task_missing") {
+        if (payload.type === "task_failed") {
+          downloadBoardState.days.forEach((dayMap) => {
+            dayMap.forEach((cell, ds) => {
+              if (cell.status === "running") dayMap.set(ds, {status: "error"});
+            });
+          });
+          downloadBoardState.datasetLevel.forEach((cell, ds) => {
+            if (cell.status === "running" || cell.status === "checking") {
+              downloadBoardState.datasetLevel.set(ds, {status: "error"});
+            }
+          });
+          renderDownloadBoard();
+        }
         clearAllInlineLogs();
       }
       appendLog(JSON.stringify(payload));
     }
 
     async function startDownload() {
+      const datasets = getSelectedDatasets();
       const payload = {
         start: document.getElementById("start").value.trim(),
         end: document.getElementById("end").value.trim(),
         input_timezone: document.getElementById("inputTimezone").value.trim() || "UTC",
         instrument_id: document.getElementById("instrument").value.trim(),
-        datasets: document.getElementById("datasets").value.split(",").map(x => x.trim()).filter(Boolean),
+        datasets,
         output_subdir: document.getElementById("outputSubdir").value.trim(),
         bar: "1m",
       };
+      const plannedDayCount = estimatePlannedDayCount(payload.start, payload.end);
+      resetDownloadBoard(datasets, {plannedDayCount});
       const resp = await fetch(api.startDownload, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -530,12 +1992,41 @@
       const data = await resp.json();
       const task = data.task;
       currentTaskId = task.task_id;
+      sseEventIndex = 0;
       document.getElementById("taskMeta").textContent = `当前任务: ${currentTaskId}`;
       document.getElementById("taskJson").textContent = JSON.stringify(task, null, 2);
+      updateTaskVisual(task);
       appendLog(`任务已创建: ${currentTaskId}`);
       connectEvents(currentTaskId);
       await refreshSummary();
-      await refreshCoverage();
+    }
+
+    async function startRebuildIndex() {
+      const datasets = getSelectedDatasets();
+      resetDownloadBoard(datasets, {plannedDayCount: 0});
+      const payload = {
+        instrument_id: document.getElementById("instrument").value.trim(),
+        datasets,
+        output_subdir: document.getElementById("outputSubdir").value.trim(),
+        bar: "1m",
+        input_timezone: document.getElementById("inputTimezone").value.trim() || "UTC",
+      };
+      const resp = await fetch(api.startRebuildIndex, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) throw new Error("启动重建索引失败");
+      const data = await resp.json();
+      const task = data.task;
+      currentTaskId = task.task_id;
+      sseEventIndex = 0;
+      document.getElementById("taskMeta").textContent = `当前任务: ${currentTaskId}`;
+      document.getElementById("taskJson").textContent = JSON.stringify(task, null, 2);
+      updateTaskVisual(task);
+      appendLog(`索引重建任务已创建: ${currentTaskId}`);
+      connectEvents(currentTaskId);
+      await refreshTasks();
     }
 
     async function refreshTasks() {
@@ -546,6 +2037,7 @@
       currentTaskId = task.task_id;
       document.getElementById("taskMeta").textContent = `最近任务: ${task.task_id} (${task.status})`;
       document.getElementById("taskJson").textContent = JSON.stringify(task, null, 2);
+      updateTaskVisual(task);
     }
 
     function connectEvents(taskId, isReconnect = false) {
@@ -554,7 +2046,7 @@
       if (!isReconnect) clearAllInlineLogs();
       setSseState("connecting", isReconnect ? "重连中" : "连接中");
       sseLastMessageAt = Date.now();
-      currentEventSource = new EventSource(`/api/tasks/${taskId}/events`);
+      currentEventSource = new EventSource(`/api/tasks/${taskId}/events?from_index=${sseEventIndex}`);
       if (isReconnect) appendLog(`SSE 已重连: ${taskId}`);
       currentEventSource.onopen = () => {
         setSseState("connected", "已连接");
@@ -567,6 +2059,9 @@
           setSseState("connected", "已连接");
           return;
         }
+        if (payload.type !== "stream_end" && payload.type !== "task_missing") {
+          sseEventIndex += 1;
+        }
         handleSseLogPayload(payload);
         if (payload.type === "task_completed" || payload.type === "task_failed" || payload.type === "stream_end" || payload.type === "task_missing") {
           closeCurrentEventSource();
@@ -577,7 +2072,6 @@
           if (payload.type === "task_missing") setSseState("error", "任务不存在");
           refreshTasks().catch(() => {});
           refreshSummary().catch(() => {});
-          refreshCoverage().catch(() => {});
         }
       };
       currentEventSource.onerror = () => {
@@ -599,26 +2093,124 @@
       const params = new URLSearchParams({
         instrument_id: document.getElementById("instrument").value.trim(),
         output_subdir: document.getElementById("outputSubdir").value.trim(),
+        start: document.getElementById("start").value.trim(),
+        end: document.getElementById("end").value.trim(),
+        timezone_name: document.getElementById("inputTimezone").value.trim() || "UTC",
+        bar: "1m",
       });
       const resp = await fetch(`${api.summary}?${params.toString()}`);
       const data = await resp.json();
-      document.getElementById("summaryJson").textContent = JSON.stringify(data.summary, null, 2);
+      const summary = data.summary || {};
+      const partitions = summary.partitions || {};
+      const manifests = summary.manifests || {};
+      const continuity = summary.continuity || {};
+      const board = document.getElementById("summaryBoard");
+      const raw = document.getElementById("summaryJson");
+      const overviewTitle = document.getElementById("summaryOverviewTitle");
+      const overviewSub = document.getElementById("summaryOverviewSub");
+      const overviewBadge = document.getElementById("summaryOverviewBadge");
+      if (raw) raw.textContent = JSON.stringify(summary, null, 2);
+
+      const datasets = [
+        {path: "candles", emoji: "📈", name: "candles"},
+        {path: "mark_price_candles", emoji: "🛡️", name: "mark_price_candles"},
+        {path: "index_candles", emoji: "🌍", name: "index_candles"},
+        {path: "funding_rates", emoji: "💸", name: "funding_rates"},
+      ];
+
+      const items = datasets.map((item) => {
+        const partitionCount = Number(partitions[item.path] || 0);
+        const manifest = manifests[item.path] || {};
+        const rows = Number(manifest.rows_in_batch || 0);
+        const minTime = manifest.min_iso_time || manifest.min_iso_time_utc || "-";
+        const maxTime = manifest.max_iso_time || manifest.max_iso_time_utc || "-";
+        const hasData = partitionCount > 0;
+        const isFunding = item.path === "funding_rates";
+        const c = continuity[item.path] || null;
+        const continuityApplicable = c && c.source !== "not_applicable" && Number.isFinite(Number(c.expected_days_count || 0));
+        const missingDays = continuityApplicable ? (c.missing_days || []) : [];
+        const missingRanges = continuityApplicable ? (c.missing_ranges || []) : [];
+        const expectedDaysCount = continuityApplicable ? Number(c.expected_days_count || 0) : 0;
+        const coveredDaysCount = continuityApplicable ? Number(c.covered_days_count || 0) : 0;
+        const coverageRatio = continuityApplicable ? Number(c.coverage_ratio || 0) : null;
+        const continuityOk = !continuityApplicable || missingDays.length === 0;
+        const status = hasData && continuityOk ? "good" : "warn";
+        const statusText = hasData ? (continuityOk ? "可用" : "有缺口") : "待补数";
+        const missingRangesText = continuityApplicable
+          ? (missingRanges.length ? missingRanges.slice(0, 4).join(", ") : "无")
+          : "不适用";
+        const missingDaysText = continuityApplicable
+          ? (missingDays.length ? `${missingDays.slice(0, 8).join(", ")}${missingDays.length > 8 ? ` ...(+${missingDays.length - 8})` : ""}` : "无")
+          : "不适用";
+        const advice = !hasData
+          ? "当前未检测到有效数据分区，建议先执行下载或补数任务。"
+          : (isFunding
+            ? "可用于资金费率/持仓成本建模（注意公共接口仅近3个月，日连续性不适用）。"
+            : (continuityOk
+              ? "所选范围日连续性通过，可直接用于回测。"
+              : "所选范围存在日期缺口，建议先补数后再跑完整策略回测。"));
+        return {
+          ...item,
+          partitionCount,
+          rows,
+          minTime,
+          maxTime,
+          continuityApplicable,
+          expectedDaysCount,
+          coveredDaysCount,
+          coverageRatio,
+          missingDays,
+          missingRangesText,
+          missingDaysText,
+          status,
+          statusText,
+          advice,
+        };
+      });
+
+      if (board) {
+        board.innerHTML = items.map((item) => `
+          <article class="quality-card">
+            <div class="head">
+              <div class="name">${item.emoji} ${item.name}</div>
+              <span class="quality-pill ${item.status}">${item.statusText}</span>
+            </div>
+            <div class="quality-kv">
+              <div><strong>分区数</strong><br>${item.partitionCount}</div>
+              <div><strong>最新批次行数</strong><br>${item.rows}</div>
+              <div><strong>最早时间</strong><br>${item.minTime}</div>
+              <div><strong>最晚时间</strong><br>${item.maxTime}</div>
+              <div><strong>连续性覆盖</strong><br>${item.continuityApplicable ? `${item.coveredDaysCount}/${item.expectedDaysCount} (${item.coverageRatio.toFixed(2)}%)` : "不适用"}</div>
+              <div><strong>缺失天数</strong><br>${item.continuityApplicable ? item.missingDays.length : "-"}</div>
+              <div><strong>缺口段</strong><br>${item.missingRangesText}</div>
+              <div><strong>缺失日期</strong><br>${item.missingDaysText}</div>
+            </div>
+            <div class="quality-advice">${item.advice}</div>
+          </article>
+        `).join("");
+      }
+
+      const availableCount = items.filter((item) => item.status === "good").length;
+      const totalCount = items.length;
+      const allReady = availableCount === totalCount;
+      if (overviewTitle) overviewTitle.textContent = `数据就绪度：${availableCount}/${totalCount}`;
+      if (overviewSub) overviewSub.textContent = allReady
+        ? "全部核心数据集已检测到本地分区，可进入回测阶段。"
+        : "仍有数据集缺失，建议先补齐再进行完整策略回测。";
+      if (overviewBadge) {
+        overviewBadge.textContent = allReady ? "可用于回测" : "需补数";
+        overviewBadge.className = `quality-badge ${allReady ? "good" : "warn"}`;
+      }
     }
 
-    async function refreshCoverage() {
-      const params = new URLSearchParams({
-        instrument_id: document.getElementById("instrument").value.trim(),
-        output_subdir: document.getElementById("outputSubdir").value.trim(),
-        timezone_name: document.getElementById("previewTimezone").value.trim() || "Asia/Shanghai",
-      });
-      const resp = await fetch(`${api.coverage}?${params.toString()}`);
-      const data = await resp.json();
-      const coverage = data.coverage || {};
+    function renderCoverageBoard(coverage, doneCount = 0, totalCount = 0, options = {}) {
+      const isRefreshing = Boolean(options.isRefreshing);
       const datasets = coverage.datasets || {};
       const names = Object.keys(datasets);
-      document.getElementById("coverageMeta").textContent = `时区: ${coverage.timezone || "Asia/Shanghai"} | 数据集: ${names.length}`;
+      const progressText = totalCount > 0 ? ` | 进度: ${doneCount}/${totalCount}` : "";
+      document.getElementById("coverageMeta").textContent = `时区: ${coverage.timezone || "Asia/Shanghai"} | 数据集: ${names.length}${progressText}`;
       if (!names.length) {
-        document.getElementById("coverageJson").textContent = "无本地数据";
+        document.getElementById("coverageJson").textContent = isRefreshing ? "刷新中..." : "暂无覆盖数据";
         return;
       }
 
@@ -634,9 +2226,86 @@
       document.getElementById("coverageJson").textContent = lines.join("\n");
     }
 
+    async function refreshCoverage() {
+      if (coverageRefreshing) return;
+      const instrumentId = document.getElementById("instrument").value.trim();
+      const outputSubdir = document.getElementById("outputSubdir").value.trim();
+      const timezoneName = document.getElementById("previewTimezone").value.trim() || "Asia/Shanghai";
+      const selectedDatasetPaths = Array.from(new Set(getSelectedDatasets().map((name) => datasetToPath[name]).filter(Boolean)));
+      const mergedCoverage = { timezone: timezoneName, datasets: {} };
+
+      setCoverageRefreshingState(true);
+      closeCoverageEventSource();
+      renderCoverageBoard(mergedCoverage, 0, selectedDatasetPaths.length, {isRefreshing: true});
+
+      if (!selectedDatasetPaths.length) {
+        coverageLoaded = true;
+        setCoverageRefreshingState(false);
+        return;
+      }
+
+      const params = new URLSearchParams({
+        instrument_id: instrumentId,
+        output_subdir: outputSubdir,
+        timezone_name: timezoneName,
+        datasets: selectedDatasetPaths.join(","),
+      });
+
+      await new Promise((resolve, reject) => {
+        let finished = false;
+        coverageEventSource = new EventSource(`${api.coverageStream}?${params.toString()}`);
+        coverageEventSource.onmessage = (event) => {
+          if (!event.data) return;
+          let payload = null;
+          try {
+            payload = JSON.parse(event.data);
+          } catch (_err) {
+            return;
+          }
+          if (payload.type === "coverage_started") {
+            renderCoverageBoard(
+              mergedCoverage,
+              0,
+              payload.requested_datasets ? payload.requested_datasets.length : selectedDatasetPaths.length,
+              {isRefreshing: true},
+            );
+            return;
+          }
+          if (payload.type === "coverage_chunk") {
+            const coverage = payload.coverage || {};
+            const datasets = coverage.datasets || {};
+            Object.keys(datasets).forEach((datasetName) => {
+              mergedCoverage.datasets[datasetName] = datasets[datasetName];
+            });
+            renderCoverageBoard(mergedCoverage, payload.done || 0, payload.total || selectedDatasetPaths.length, {isRefreshing: true});
+            return;
+          }
+          if (payload.type === "coverage_completed") {
+            const coverage = payload.coverage || {};
+            const datasets = coverage.datasets || {};
+            Object.keys(datasets).forEach((datasetName) => {
+              mergedCoverage.datasets[datasetName] = datasets[datasetName];
+            });
+            renderCoverageBoard(mergedCoverage, payload.done || selectedDatasetPaths.length, payload.total || selectedDatasetPaths.length);
+            coverageLoaded = true;
+            finished = true;
+            closeCoverageEventSource();
+            setCoverageRefreshingState(false);
+            resolve();
+          }
+        };
+        coverageEventSource.onerror = () => {
+          if (finished) return;
+          closeCoverageEventSource();
+          setCoverageRefreshingState(false);
+          reject(new Error("覆盖统计流连接失败"));
+        };
+      });
+    }
+
     async function loadPreview() {
-      const rawStart = document.getElementById("previewStart").value.trim();
-      const rawEnd = document.getElementById("previewEnd").value.trim();
+      const rawStart = previewStartInput.value.trim();
+      const rawEnd = previewEndInput.value.trim();
       const endForQuery = normalizeEndForDateRange(rawStart, rawEnd);
       const inputLimit = Number.parseInt(document.getElementById("previewLimit").value.trim(), 10);
       const tableLimit = Number.isFinite(inputLimit) ? Math.max(1, Math.min(inputLimit, 5000)) : 500;
@@ -789,8 +2458,9 @@
       const start = chartState.points[chartState.visibleStart];
       const end = chartState.points[chartState.visibleEnd];
       if (!start || !end) return;
-      document.getElementById("previewStart").value = formatDateOnly(start.tsMs);
-      document.getElementById("previewEnd").value = formatDateOnly(end.tsMs);
+      previewStartInput.value = formatDateOnly(start.tsMs);
+      previewEndInput.value = formatDateOnly(end.tsMs);
+      syncPreviewRangeInput();
     }
 
     function updateWindowSlider() {
@@ -1119,6 +2789,9 @@
     document.getElementById("startBtn").addEventListener("click", () => {
       startDownload().catch((err) => appendLog(`启动失败: ${err.message}`));
     });
+    document.getElementById("rebuildIndexBtn").addEventListener("click", () => {
+      startRebuildIndex().catch((err) => appendLog(`索引重建启动失败: ${err.message}`));
+    });
     document.getElementById("refreshTasksBtn").addEventListener("click", () => {
       refreshTasks().catch((err) => appendLog(`刷新任务失败: ${err.message}`));
     });
@@ -1128,6 +2801,16 @@
     document.getElementById("refreshCoverageBtn").addEventListener("click", () => {
       refreshCoverage().catch((err) => appendLog(`刷新看板失败: ${err.message}`));
     });
+    if (toggleCoverageBtn && coverageContent) {
+      toggleCoverageBtn.addEventListener("click", () => {
+        const opening = coverageContent.style.display === "none";
+        coverageContent.style.display = opening ? "block" : "none";
+        toggleCoverageBtn.textContent = opening ? "收起覆盖看板" : "展开覆盖看板";
+        if (opening && !coverageLoaded) {
+          refreshCoverage().catch((err) => appendLog(`刷新看板失败: ${err.message}`));
+        }
+      });
+    }
     window.addEventListener("resize", () => {
       if (chartState.points.length) drawKlineChart();
     });
@@ -1138,13 +2821,20 @@
         connectEvents(currentTaskId, true);
       }
     });
+    window.addEventListener("beforeunload", () => {
+      closeCoverageEventSource();
+    });
 
     bindChartInteractions();
+    initDisplayOnlyFields();
+    initDefaultDateRange();
+    bindDatasetPicker();
+    renderDownloadBoard();
+    bindPreviewRangePicker();
     bindPreviewAutoReload();
     ensureTaskPolling();
     refreshTasks().catch(() => {});
     refreshSummary().catch(() => {});
-    refreshCoverage().catch(() => {});
     loadPreview().catch(() => {});
   </script>
 </body>

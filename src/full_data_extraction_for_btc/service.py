@@ -1,46 +1,37 @@
 from __future__ import annotations
 
-import csv
-import gzip
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+from queue import Queue
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from queue import Empty, Queue
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
 from full_data_extraction_for_btc.client import OkxPublicClient
 from full_data_extraction_for_btc.downloader import CANDLE_DATASETS, DATASET_TO_PATH, collect_dataset_rows
+from full_data_extraction_for_btc.services.continuity_index import (
+    compute_complete_months,
+    day_index_file_path,
+    is_local_day_continuous,
+    load_day_index,
+    load_month_index,
+    month_index_file_path,
+    persist_day_and_month_indexes,
+    rebuild_day_and_month_index,
+)
+from full_data_extraction_for_btc.services.event_logging import log_terminal_event
+from full_data_extraction_for_btc.services.models import DownloadTask
+from full_data_extraction_for_btc.services.time_windows import (
+    calc_processed_minutes,
+    calc_total_minutes,
+    format_day_key,
+    iter_day_windows,
+)
 from full_data_extraction_for_btc.storage import DatasetStorage
 from full_data_extraction_for_btc.timeutils import parse_datetime_input, to_iso_utc
-
-
-@dataclass
-class DownloadTask:
-    task_id: str
-    status: str
-    created_at: float
-    updated_at: float
-    request: dict[str, Any]
-    summaries: list[dict[str, Any]] = field(default_factory=list)
-    error: str | None = None
-    event_queue: Queue[str] = field(default_factory=Queue)
-    events_history: list[str] = field(default_factory=list)
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "task_id": self.task_id,
-            "status": self.status,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "request": self.request,
-            "summaries": self.summaries,
-            "error": self.error,
-        }
 
 
 class DownloadService:
@@ -49,23 +40,19 @@ class DownloadService:
         self.client_factory = client_factory or (lambda base_url: OkxPublicClient(base_url=base_url))
         self._lock = threading.Lock()
         self._tasks: dict[str, DownloadTask] = {}
+        self._task_queue: Queue[tuple[str, str]] = Queue()
+        self._active_task_id: str | None = None
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker.start()
 
     def start_download(self, request: dict[str, Any]) -> DownloadTask:
-        task_id = uuid.uuid4().hex
-        now = time.time()
-        task = DownloadTask(
-            task_id=task_id,
-            status="queued",
-            created_at=now,
-            updated_at=now,
-            request=request,
-        )
-        with self._lock:
-            self._tasks[task_id] = task
-        self._emit(task, {"type": "task_created", "task_id": task_id})
+        task = self._create_task(request=request)
+        self._enqueue_task(task, task_kind="download")
+        return task
 
-        worker = threading.Thread(target=self._run_download_task, args=(task_id,), daemon=True)
-        worker.start()
+    def start_rebuild_index(self, request: dict[str, Any]) -> DownloadTask:
+        task = self._create_task(request=request, task_kind="rebuild_index")
+        self._enqueue_task(task, task_kind="rebuild_index")
         return task
 
     def get_task(self, task_id: str) -> DownloadTask | None:
@@ -81,20 +68,64 @@ class DownloadService:
         task = self.get_task(task_id)
         if task is None:
             return [], from_index
-
         with self._lock:
             history = task.events_history[from_index:]
             new_index = len(task.events_history)
         return history, new_index
 
-    def pop_event(self, task_id: str, timeout_seconds: float) -> str | None:
-        task = self.get_task(task_id)
-        if task is None:
-            return None
-        try:
-            return task.event_queue.get(timeout=timeout_seconds)
-        except Empty:
-            return None
+    def _create_task(self, request: dict[str, Any], task_kind: str | None = None) -> DownloadTask:
+        task_id = uuid.uuid4().hex
+        now = time.time()
+        task = DownloadTask(
+            task_id=task_id,
+            status="queued",
+            created_at=now,
+            updated_at=now,
+            request=request,
+        )
+        with self._lock:
+            self._tasks[task_id] = task
+        payload: dict[str, Any] = {"type": "task_created", "task_id": task_id}
+        if task_kind is not None:
+            payload["task_kind"] = task_kind
+        self._emit(task, payload)
+        return task
+
+    def _enqueue_task(self, task: DownloadTask, task_kind: str) -> None:
+        with self._lock:
+            pending = self._task_queue.qsize()
+            has_active = self._active_task_id is not None
+            queue_position = pending + (1 if has_active else 0) + 1
+        self._task_queue.put((task_kind, task.task_id))
+        self._emit(task, {"type": "task_queued", "task_id": task.task_id, "task_kind": task_kind, "queue_position": queue_position})
+
+    def _worker_loop(self) -> None:
+        while True:
+            task_kind, task_id = self._task_queue.get()
+            try:
+                with self._lock:
+                    self._active_task_id = task_id
+                if task_kind == "download":
+                    self._run_download_task(task_id)
+                elif task_kind == "rebuild_index":
+                    self._run_rebuild_index_task(task_id)
+                else:
+                    task = self.get_task(task_id)
+                    if task is not None:
+                        task.error = f"unsupported task kind: {task_kind}"
+                        self._set_status(task, "failed")
+                        self._emit(task, {"type": "task_failed", "task_id": task.task_id, "error": task.error})
+            except Exception as exc:  # noqa: BLE001
+                task = self.get_task(task_id)
+                if task is not None:
+                    task.error = str(exc)
+                    self._set_status(task, "failed")
+                    self._emit(task, {"type": "task_failed", "task_id": task.task_id, "error": task.error})
+            finally:
+                with self._lock:
+                    if self._active_task_id == task_id:
+                        self._active_task_id = None
+                self._task_queue.task_done()
 
     def _run_download_task(self, task_id: str) -> None:
         task = self.get_task(task_id)
@@ -124,126 +155,19 @@ class DownloadService:
             for dataset in datasets:
                 self._emit(task, {"type": "dataset_started", "dataset": dataset})
                 if dataset in CANDLE_DATASETS:
-                    rows_written_total = 0
-                    min_ts: int | None = None
-                    max_ts: int | None = None
-                    for day_start_ms, day_end_ms in _iter_day_windows(
+                    summary = self._download_candle_dataset(
+                        task=task,
+                        storage=storage,
+                        dataset=dataset,
+                        dataset_path=DATASET_TO_PATH[dataset],
+                        instrument_id=instrument_id,
+                        base_url=base_url,
+                        bar=bar,
+                        input_tz=input_tz,
+                        output=output,
                         start_ms=start_ms,
                         end_ms=end_ms,
-                        tz_name=input_tz,
-                    ):
-                        day_key = _format_day_key(day_start_ms, tz_name=input_tz)
-                        day_total_minutes = _calc_total_minutes(day_start_ms, day_end_ms)
-                        self._emit(
-                            task,
-                            {
-                                "type": "dataset_day_started",
-                                "dataset": dataset,
-                                "day": day_key,
-                                "day_start_ms": day_start_ms,
-                                "day_end_ms": day_end_ms,
-                                "total_minutes": day_total_minutes,
-                            },
-                        )
-
-                        if _is_local_day_continuous(
-                            output_root=output,
-                            instrument_id=instrument_id,
-                            dataset_path=DATASET_TO_PATH[dataset],
-                            day_start_ms=day_start_ms,
-                            day_end_ms=day_end_ms,
-                            bar=bar,
-                        ):
-                            self._emit(
-                                task,
-                                {
-                                    "type": "dataset_day_skipped",
-                                    "dataset": dataset,
-                                    "day": day_key,
-                                    "day_start_ms": day_start_ms,
-                                    "day_end_ms": day_end_ms,
-                                    "total_minutes": day_total_minutes,
-                                    "reason": "local_data_continuous",
-                                },
-                            )
-                            continue
-
-                        def _on_day_progress(payload: dict[str, Any], ds: str = dataset, day: str = day_key) -> None:
-                            processed_minutes = _calc_processed_minutes(
-                                oldest_in_page=payload.get("oldest_in_page"),
-                                day_start_ms=day_start_ms,
-                                day_end_ms=day_end_ms,
-                                total_minutes=day_total_minutes,
-                            )
-                            progress_pct = round((processed_minutes * 100.0) / day_total_minutes, 2) if day_total_minutes > 0 else 0.0
-                            self._emit(
-                                task,
-                                {
-                                    "type": "dataset_day_progress",
-                                    "dataset": ds,
-                                    "day": day,
-                                    "day_start_ms": day_start_ms,
-                                    "day_end_ms": day_end_ms,
-                                    "total_minutes": day_total_minutes,
-                                    "processed_minutes": processed_minutes,
-                                    "progress_pct": progress_pct,
-                                    **payload,
-                                },
-                            )
-
-                        day_rows = collect_dataset_rows(
-                            client=client,
-                            dataset=dataset,
-                            instrument_id=instrument_id,
-                            bar=bar,
-                            start_ms=day_start_ms,
-                            end_ms=day_end_ms,
-                            on_progress=_on_day_progress,
-                        )
-
-                        day_summary = storage.write_rows(
-                            DATASET_TO_PATH[dataset],
-                            day_rows,
-                            primary_key="ts",
-                        )
-                        rows_written_total += day_summary["rows_written"]
-
-                        if day_rows:
-                            day_timestamps = [int(row["ts"]) for row in day_rows]
-                            day_min_ts = min(day_timestamps)
-                            day_max_ts = max(day_timestamps)
-                            min_ts = day_min_ts if min_ts is None else min(min_ts, day_min_ts)
-                            max_ts = day_max_ts if max_ts is None else max(max_ts, day_max_ts)
-
-                        self._emit(
-                            task,
-                            {
-                                "type": "dataset_day_finished",
-                                "dataset": dataset,
-                                "day": day_key,
-                                "day_start_ms": day_start_ms,
-                                "day_end_ms": day_end_ms,
-                                "rows_downloaded": len(day_rows),
-                                "rows_written": day_summary["rows_written"],
-                            },
-                        )
-
-                    summary = {
-                        "dataset": DATASET_TO_PATH[dataset],
-                        "rows_written": rows_written_total,
-                    }
-                    if min_ts is not None and max_ts is not None:
-                        storage.write_json(
-                            f"metadata/manifests/{DATASET_TO_PATH[dataset]}.json",
-                            {
-                                "dataset": DATASET_TO_PATH[dataset],
-                                "rows_in_batch": rows_written_total,
-                                "min_ts": min_ts,
-                                "max_ts": max_ts,
-                                "min_iso_time": to_iso_utc(min_ts),
-                                "max_iso_time": to_iso_utc(max_ts),
-                            },
-                        )
+                    )
                 else:
                     rows = collect_dataset_rows(
                         client=client,
@@ -261,6 +185,7 @@ class DownloadService:
                         rows,
                         primary_key="funding_time" if dataset == "funding" else "ts",
                     )
+
                 summary["requested_dataset"] = dataset
                 if dataset == "funding":
                     summary["note"] = "OKX public funding-rate history is limited to the most recent 3 months."
@@ -268,6 +193,533 @@ class DownloadService:
                 self._emit(task, {"type": "dataset_finished", "dataset": dataset, "rows_written": summary["rows_written"]})
 
             task.summaries = summaries
+            self._set_status(task, "completed")
+            self._emit(task, {"type": "task_completed", "task_id": task.task_id, "summaries": summaries})
+        except Exception as exc:  # noqa: BLE001
+            task.error = str(exc)
+            self._set_status(task, "failed")
+            self._emit(task, {"type": "task_failed", "task_id": task.task_id, "error": task.error})
+
+    def _download_candle_dataset(
+        self,
+        task: DownloadTask,
+        storage: DatasetStorage,
+        dataset: str,
+        dataset_path: str,
+        instrument_id: str,
+        base_url: str,
+        bar: str,
+        input_tz: str,
+        output: Path,
+        start_ms: int,
+        end_ms: int,
+    ) -> dict[str, Any]:
+        day_index = load_day_index(
+            output_root=output,
+            instrument_id=instrument_id,
+            dataset_path=dataset_path,
+            bar=bar,
+            tz_name=input_tz,
+        )
+        month_index = load_month_index(
+            output_root=output,
+            instrument_id=instrument_id,
+            dataset_path=dataset_path,
+            bar=bar,
+            tz_name=input_tz,
+        )
+
+        index_dirty = False
+        computed_months = compute_complete_months(day_index)
+        reconciled_month_index = set(month_index) | computed_months
+        missing_months = sorted(computed_months - month_index)
+        for month in missing_months:
+            self._emit(
+                task,
+                {
+                    "type": "dataset_month_index_added",
+                    "dataset": dataset,
+                    "month": month,
+                    "source": "startup_reconcile",
+                },
+            )
+        if missing_months:
+            index_dirty = True
+        month_index = reconciled_month_index
+
+        rows_written_total = 0
+        min_ts: int | None = None
+        max_ts: int | None = None
+        all_windows = sorted(
+            iter_day_windows(start_ms=start_ms, end_ms=end_ms, tz_name=input_tz),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        request_month_count = len({format_day_key(day_start_ms, tz_name=input_tz)[:7] for day_start_ms, _ in all_windows})
+        pending_by_month: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        requested_days_by_month: dict[str, list[str]] = defaultdict(list)
+        month_skip_emitted: set[str] = set()
+
+        for day_start_ms, _day_end_ms in all_windows:
+            day_key = format_day_key(day_start_ms, tz_name=input_tz)
+            requested_days_by_month[day_key[:7]].append(day_key)
+
+        for day_start_ms, day_end_ms in all_windows:
+            day_key = format_day_key(day_start_ms, tz_name=input_tz)
+            month_key = day_key[:7]
+            day_total_minutes = calc_total_minutes(day_start_ms, day_end_ms)
+
+            if month_key in month_index:
+                if month_key not in month_skip_emitted:
+                    month_skip_emitted.add(month_key)
+                    hit_days = requested_days_by_month.get(month_key, [])
+                    self._emit(
+                        task,
+                        {
+                            "type": "dataset_month_skipped",
+                            "dataset": dataset,
+                            "month": month_key,
+                            "days": hit_days,
+                            "days_count": len(hit_days),
+                            "reason": "month_index_hit",
+                        },
+                    )
+                continue
+
+            if day_key in day_index:
+                self._emit(
+                    task,
+                    {
+                        "type": "dataset_day_skipped",
+                        "dataset": dataset,
+                        "day": day_key,
+                        "day_start_ms": day_start_ms,
+                        "day_end_ms": day_end_ms,
+                        "total_minutes": day_total_minutes,
+                        "reason": "day_index_hit",
+                    },
+                )
+                continue
+
+            self._emit(
+                task,
+                {
+                    "type": "dataset_day_checking",
+                    "dataset": dataset,
+                    "day": day_key,
+                    "day_start_ms": day_start_ms,
+                    "day_end_ms": day_end_ms,
+                    "total_minutes": day_total_minutes,
+                },
+            )
+
+            if is_local_day_continuous(
+                output_root=output,
+                instrument_id=instrument_id,
+                dataset_path=dataset_path,
+                day_start_ms=day_start_ms,
+                day_end_ms=day_end_ms,
+                bar=bar,
+            ):
+                if day_key not in day_index:
+                    day_index.add(day_key)
+                    index_dirty = True
+                    self._emit(
+                        task,
+                        {
+                            "type": "dataset_day_index_added",
+                            "dataset": dataset,
+                            "day": day_key,
+                            "source": "continuity_check",
+                        },
+                    )
+                    month_index = self._update_month_index(
+                        task=task,
+                        dataset=dataset,
+                        day_index=day_index,
+                        month_index=month_index,
+                        source="continuity_check",
+                    )
+
+                self._emit(
+                    task,
+                    {
+                        "type": "dataset_day_skipped",
+                        "dataset": dataset,
+                        "day": day_key,
+                        "day_start_ms": day_start_ms,
+                        "day_end_ms": day_end_ms,
+                        "total_minutes": day_total_minutes,
+                        "reason": "local_data_continuous",
+                    },
+                )
+                continue
+
+            pending_by_month[month_key].append(
+                {
+                    "day_key": day_key,
+                    "day_start_ms": day_start_ms,
+                    "day_end_ms": day_end_ms,
+                    "day_total_minutes": day_total_minutes,
+                }
+            )
+
+        pending_month_keys = sorted(pending_by_month.keys(), reverse=True)
+        if request_month_count > 1 and len(pending_month_keys) > 1:
+            workers = min(5, len(pending_month_keys))
+            self._emit(
+                task,
+                {
+                    "type": "dataset_parallel_started",
+                    "dataset": dataset,
+                    "months": len(pending_month_keys),
+                    "workers": workers,
+                },
+            )
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(
+                        self._download_month_days,
+                        task,
+                        dataset,
+                        instrument_id,
+                        bar,
+                        base_url,
+                        month_key,
+                        pending_by_month[month_key],
+                    )
+                    for month_key in pending_month_keys
+                ]
+                for future in as_completed(futures):
+                    for plan, day_rows in future.result():
+                        rows_written_total, min_ts, max_ts, index_dirty, month_index = self._process_downloaded_day(
+                            task=task,
+                            storage=storage,
+                            dataset=dataset,
+                            dataset_path=dataset_path,
+                            instrument_id=instrument_id,
+                            bar=bar,
+                            output=output,
+                            plan=plan,
+                            day_rows=day_rows,
+                            day_index=day_index,
+                            month_index=month_index,
+                            rows_written_total=rows_written_total,
+                            min_ts=min_ts,
+                            max_ts=max_ts,
+                            index_dirty=index_dirty,
+                        )
+        else:
+            worker_client = self.client_factory(base_url)
+            for month_key in pending_month_keys:
+                for plan in pending_by_month[month_key]:
+                    day_rows = self._collect_day_rows(
+                        task=task,
+                        client=worker_client,
+                        dataset=dataset,
+                        instrument_id=instrument_id,
+                        bar=bar,
+                        plan=plan,
+                    )
+                    rows_written_total, min_ts, max_ts, index_dirty, month_index = self._process_downloaded_day(
+                        task=task,
+                        storage=storage,
+                        dataset=dataset,
+                        dataset_path=dataset_path,
+                        instrument_id=instrument_id,
+                        bar=bar,
+                        output=output,
+                        plan=plan,
+                        day_rows=day_rows,
+                        day_index=day_index,
+                        month_index=month_index,
+                        rows_written_total=rows_written_total,
+                        min_ts=min_ts,
+                        max_ts=max_ts,
+                        index_dirty=index_dirty,
+                    )
+
+        if index_dirty:
+            updated_months = persist_day_and_month_indexes(
+                output_root=output,
+                instrument_id=instrument_id,
+                dataset_path=dataset_path,
+                bar=bar,
+                tz_name=input_tz,
+                days=day_index,
+            )
+            month_index = updated_months
+            self._emit(
+                task,
+                {
+                    "type": "dataset_index_saved",
+                    "dataset": dataset,
+                    "indexed_days": len(day_index),
+                    "indexed_months": len(month_index),
+                    "bar": bar,
+                    "timezone": input_tz,
+                },
+            )
+
+        summary = {"dataset": dataset_path, "rows_written": rows_written_total}
+        if min_ts is not None and max_ts is not None:
+            storage.write_json(
+                f"metadata/manifests/{dataset_path}.json",
+                {
+                    "dataset": dataset_path,
+                    "rows_in_batch": rows_written_total,
+                    "min_ts": min_ts,
+                    "max_ts": max_ts,
+                    "min_iso_time": to_iso_utc(min_ts),
+                    "max_iso_time": to_iso_utc(max_ts),
+                },
+            )
+        return summary
+
+    def _download_month_days(
+        self,
+        task: DownloadTask,
+        dataset: str,
+        instrument_id: str,
+        bar: str,
+        base_url: str,
+        month_key: str,
+        plans: list[dict[str, Any]],
+    ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+        self._emit(task, {"type": "dataset_parallel_month_started", "dataset": dataset, "month": month_key, "days": len(plans)})
+        client = self.client_factory(base_url)
+        results: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+        for plan in plans:
+            day_rows = self._collect_day_rows(
+                task=task,
+                client=client,
+                dataset=dataset,
+                instrument_id=instrument_id,
+                bar=bar,
+                plan=plan,
+            )
+            results.append((plan, day_rows))
+        self._emit(task, {"type": "dataset_parallel_month_finished", "dataset": dataset, "month": month_key, "days": len(plans)})
+        return results
+
+    def _collect_day_rows(
+        self,
+        task: DownloadTask,
+        client: Any,
+        dataset: str,
+        instrument_id: str,
+        bar: str,
+        plan: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        day_key = plan["day_key"]
+        day_start_ms = plan["day_start_ms"]
+        day_end_ms = plan["day_end_ms"]
+        day_total_minutes = plan["day_total_minutes"]
+
+        self._emit(
+            task,
+            {
+                "type": "dataset_day_started",
+                "dataset": dataset,
+                "day": day_key,
+                "day_start_ms": day_start_ms,
+                "day_end_ms": day_end_ms,
+                "total_minutes": day_total_minutes,
+            },
+        )
+
+        def _on_day_progress(payload: dict[str, Any], ds: str = dataset, day: str = day_key) -> None:
+            processed_minutes = calc_processed_minutes(
+                oldest_in_page=payload.get("oldest_in_page"),
+                day_start_ms=day_start_ms,
+                day_end_ms=day_end_ms,
+                total_minutes=day_total_minutes,
+            )
+            progress_pct = round((processed_minutes * 100.0) / day_total_minutes, 2) if day_total_minutes > 0 else 0.0
+            self._emit(
+                task,
+                {
+                    "type": "dataset_day_progress",
+                    "dataset": ds,
+                    "day": day,
+                    "day_start_ms": day_start_ms,
+                    "day_end_ms": day_end_ms,
+                    "total_minutes": day_total_minutes,
+                    "processed_minutes": processed_minutes,
+                    "progress_pct": progress_pct,
+                    **payload,
+                },
+            )
+
+        return collect_dataset_rows(
+            client=client,
+            dataset=dataset,
+            instrument_id=instrument_id,
+            bar=bar,
+            start_ms=day_start_ms,
+            end_ms=day_end_ms,
+            on_progress=_on_day_progress,
+        )
+
+    def _process_downloaded_day(
+        self,
+        task: DownloadTask,
+        storage: DatasetStorage,
+        dataset: str,
+        dataset_path: str,
+        instrument_id: str,
+        bar: str,
+        output: Path,
+        plan: dict[str, Any],
+        day_rows: list[dict[str, Any]],
+        day_index: set[str],
+        month_index: set[str],
+        rows_written_total: int,
+        min_ts: int | None,
+        max_ts: int | None,
+        index_dirty: bool,
+    ) -> tuple[int, int | None, int | None, bool, set[str]]:
+        day_key = plan["day_key"]
+        day_start_ms = plan["day_start_ms"]
+        day_end_ms = plan["day_end_ms"]
+        day_summary = storage.write_rows(dataset_path, day_rows, primary_key="ts")
+        rows_written_total += day_summary["rows_written"]
+
+        if day_rows:
+            day_timestamps = [int(row["ts"]) for row in day_rows]
+            day_min_ts = min(day_timestamps)
+            day_max_ts = max(day_timestamps)
+            min_ts = day_min_ts if min_ts is None else min(min_ts, day_min_ts)
+            max_ts = day_max_ts if max_ts is None else max(max_ts, day_max_ts)
+
+        self._emit(
+            task,
+            {
+                "type": "dataset_day_finished",
+                "dataset": dataset,
+                "day": day_key,
+                "day_start_ms": day_start_ms,
+                "day_end_ms": day_end_ms,
+                "rows_downloaded": len(day_rows),
+                "rows_written": day_summary["rows_written"],
+            },
+        )
+
+        if is_local_day_continuous(
+            output_root=output,
+            instrument_id=instrument_id,
+            dataset_path=dataset_path,
+            day_start_ms=day_start_ms,
+            day_end_ms=day_end_ms,
+            bar=bar,
+        ) and day_key not in day_index:
+            day_index.add(day_key)
+            index_dirty = True
+            self._emit(
+                task,
+                {
+                    "type": "dataset_day_index_added",
+                    "dataset": dataset,
+                    "day": day_key,
+                    "source": "post_write_validation",
+                },
+            )
+            month_index = self._update_month_index(
+                task=task,
+                dataset=dataset,
+                day_index=day_index,
+                month_index=month_index,
+                source="post_write_validation",
+            )
+
+        return rows_written_total, min_ts, max_ts, index_dirty, month_index
+
+    def _update_month_index(
+        self,
+        task: DownloadTask,
+        dataset: str,
+        day_index: set[str],
+        month_index: set[str],
+        source: str,
+    ) -> set[str]:
+        computed_months = compute_complete_months(day_index)
+        new_months = sorted(computed_months - month_index)
+        for month in new_months:
+            self._emit(
+                task,
+                {
+                    "type": "dataset_month_index_added",
+                    "dataset": dataset,
+                    "month": month,
+                    "source": source,
+                },
+            )
+        return computed_months
+
+    def _run_rebuild_index_task(self, task_id: str) -> None:
+        task = self.get_task(task_id)
+        if task is None:
+            return
+
+        request = task.request
+        datasets = request["datasets"]
+        instrument_id = request["instrument_id"]
+        bar = request["bar"]
+        output = self.output_root / request["output_subdir"]
+        tz_name = request.get("input_timezone", "UTC")
+
+        self._set_status(task, "running")
+        self._emit(task, {"type": "task_started", "task_id": task.task_id, "task_kind": "rebuild_index"})
+        self._emit(task, {"type": "index_rebuild_started", "task_id": task.task_id})
+
+        try:
+            summaries: list[dict[str, Any]] = []
+            for dataset in datasets:
+                if dataset not in CANDLE_DATASETS:
+                    self._emit(
+                        task,
+                        {
+                            "type": "index_rebuild_dataset_skipped",
+                            "dataset": dataset,
+                            "reason": "unsupported_for_day_continuity",
+                        },
+                    )
+                    continue
+
+                dataset_path = DATASET_TO_PATH[dataset]
+                self._emit(task, {"type": "index_rebuild_dataset_started", "dataset": dataset})
+                indexed_days, scanned_days, indexed_months = rebuild_day_and_month_index(
+                    output_root=output,
+                    instrument_id=instrument_id,
+                    dataset_path=dataset_path,
+                    bar=bar,
+                    tz_name=tz_name,
+                    on_day_checked=lambda payload, ds=dataset: self._emit(
+                        task, {"type": "index_rebuild_day_checked", "dataset": ds, **payload}
+                    ),
+                )
+                summaries.append(
+                    {
+                        "requested_dataset": dataset,
+                        "dataset": dataset_path,
+                        "indexed_days": indexed_days,
+                        "indexed_months": indexed_months,
+                        "scanned_days": scanned_days,
+                    }
+                )
+                self._emit(
+                    task,
+                    {
+                        "type": "index_rebuild_dataset_finished",
+                        "dataset": dataset,
+                        "indexed_days": indexed_days,
+                        "indexed_months": indexed_months,
+                        "scanned_days": scanned_days,
+                    },
+                )
+
+            task.summaries = summaries
+            self._emit(task, {"type": "index_rebuild_finished", "task_id": task.task_id, "summaries": summaries})
             self._set_status(task, "completed")
             self._emit(task, {"type": "task_completed", "task_id": task.task_id, "summaries": summaries})
         except Exception as exc:  # noqa: BLE001
@@ -285,92 +737,13 @@ class DownloadService:
         with self._lock:
             task.events_history.append(event)
             task.updated_at = time.time()
-        task.event_queue.put(event)
+        log_terminal_event(payload)
 
 
-def _iter_day_windows(start_ms: int, end_ms: int, tz_name: str) -> list[tuple[int, int]]:
-    if end_ms <= start_ms:
-        return []
-    tz = ZoneInfo(tz_name)
-    start_local = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).astimezone(tz)
-    end_local = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).astimezone(tz)
-    day_cursor = start_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_day = end_local.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    windows: list[tuple[int, int]] = []
-    while day_cursor <= end_day:
-        day_start_ms = int(day_cursor.astimezone(timezone.utc).timestamp() * 1000)
-        next_day = day_cursor + timedelta(days=1)
-        day_end_ms = int(next_day.astimezone(timezone.utc).timestamp() * 1000)
-        windows.append((max(start_ms, day_start_ms), min(end_ms, day_end_ms)))
-        day_cursor = next_day
-    return [(left, right) for left, right in windows if right > left]
+# Backward-compatible exports for tests and scripts.
+def _day_index_file_path(output_root: Path, instrument_id: str, dataset_path: str, bar: str, tz_name: str) -> Path:
+    return day_index_file_path(output_root, instrument_id, dataset_path, bar, tz_name)
 
 
-def _bar_to_ms(bar: str) -> int | None:
-    value = bar.strip()
-    if value.endswith("m"):
-        return int(value[:-1]) * 60 * 1000
-    if value.endswith("h"):
-        return int(value[:-1]) * 60 * 60 * 1000
-    if value.endswith("d"):
-        return int(value[:-1]) * 24 * 60 * 60 * 1000
-    if value.endswith("w"):
-        return int(value[:-1]) * 7 * 24 * 60 * 60 * 1000
-    return None
-
-
-def _calc_total_minutes(day_start_ms: int, day_end_ms: int) -> int:
-    if day_end_ms <= day_start_ms:
-        return 0
-    return max(1, (day_end_ms - day_start_ms + 60_000 - 1) // 60_000)
-
-
-def _calc_processed_minutes(oldest_in_page: Any, day_start_ms: int, day_end_ms: int, total_minutes: int) -> int:
-    if not isinstance(oldest_in_page, int):
-        return 0
-    clamped_oldest = min(max(oldest_in_page, day_start_ms), day_end_ms)
-    covered_ms = max(0, day_end_ms - clamped_oldest)
-    processed = (covered_ms + 60_000 - 1) // 60_000
-    return max(0, min(total_minutes, processed))
-
-
-def _format_day_key(day_start_ms: int, tz_name: str) -> str:
-    tz = ZoneInfo(tz_name)
-    day_dt = datetime.fromtimestamp(day_start_ms / 1000, tz=timezone.utc).astimezone(tz)
-    return day_dt.strftime("%Y-%m-%d")
-
-
-def _is_local_day_continuous(
-    output_root: Path,
-    instrument_id: str,
-    dataset_path: str,
-    day_start_ms: int,
-    day_end_ms: int,
-    bar: str,
-) -> bool:
-    step_ms = _bar_to_ms(bar)
-    if step_ms is None or day_end_ms <= day_start_ms:
-        return False
-
-    dataset_root = output_root / "okx" / instrument_id / dataset_path
-    if not dataset_root.exists():
-        return False
-
-    existing_ts: set[int] = set()
-    for path in sorted(dataset_root.glob("year=*/month=*/data.csv.gz")):
-        with gzip.open(path, "rt", encoding="utf-8", newline="") as handle:
-            for row in csv.DictReader(handle):
-                raw_ts = row.get("ts")
-                if not raw_ts:
-                    continue
-                try:
-                    ts = int(raw_ts)
-                except ValueError:
-                    continue
-                if day_start_ms <= ts < day_end_ms:
-                    existing_ts.add(ts)
-
-    if not existing_ts:
-        return False
-    return all(ts in existing_ts for ts in range(day_start_ms, day_end_ms, step_ms))
+def _month_index_file_path(output_root: Path, instrument_id: str, dataset_path: str, bar: str, tz_name: str) -> Path:
+    return month_index_file_path(output_root, instrument_id, dataset_path, bar, tz_name)
