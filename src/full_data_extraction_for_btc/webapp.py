@@ -31,7 +31,7 @@ class DownloadRequest(BaseModel):
 
 
 class RebuildIndexRequest(BaseModel):
-    datasets: list[str] = Field(default_factory=lambda: ["candles", "mark", "index"])
+    datasets: list[str] = Field(default_factory=lambda: ["candles", "mark", "index", "funding"])
     instrument_id: str = "BTC-USDT-SWAP"
     bar: str = "1m"
     input_timezone: str = "UTC"

@@ -1010,7 +1010,7 @@
       index: "index_candles",
       funding: "funding_rates",
     };
-    const dayBasedDatasets = new Set(["candles", "mark", "index"]);
+    const dayBasedDatasets = new Set(["candles", "mark", "index", "funding"]);
 
     let currentTaskId = null;
     let currentEventSource = null;
@@ -1922,7 +1922,12 @@
           setBoardCell(d, dataset, "skipped");
           clearInlineLog(`${dataset}:${d}`);
         });
-        appendLog(`[${dataset}] ${payload.month || "-"} 月索引命中，整月跳过下载 | days=${payload.days_count || hitDays.length}`);
+        const reason = payload.reason || "month_index_hit";
+        if (reason === "quarter_index_hit") {
+          appendLog(`[${dataset}] ${payload.month || "-"} 命中季度索引(${payload.quarter || "-"})，整月跳过下载 | days=${payload.days_count || hitDays.length}`);
+        } else {
+          appendLog(`[${dataset}] ${payload.month || "-"} 月索引命中，整月跳过下载 | days=${payload.days_count || hitDays.length}`);
+        }
         return;
       }
       if (payload.type === "dataset_day_index_added") {

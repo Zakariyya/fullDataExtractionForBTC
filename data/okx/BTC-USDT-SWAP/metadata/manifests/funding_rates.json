@@ -1,8 +1,8 @@
 {
   "dataset": "funding_rates",
-  "rows_in_batch": 9,
-  "min_ts": 1776729600000,
-  "max_ts": 1776960000000,
-  "min_iso_time": "2026-04-21T00:00:00Z",
-  "max_iso_time": "2026-04-23T16:00:00Z"
+  "rows_in_batch": 6,
+  "min_ts": 1776988800000,
+  "max_ts": 1777132800000,
+  "min_iso_time": "2026-04-24T00:00:00Z",
+  "max_iso_time": "2026-04-25T16:00:00Z"
 }

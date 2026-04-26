@@ -59,6 +59,8 @@ def _collect_candle_rows(
 ) -> list[dict[str, Any]]:
     # Use end_ms as the first cursor to avoid paging from latest market data.
     after: str | None = str(end_ms)
+    previous_after_int: int | None = int(after)
+    pagination_stall_count = 0
     collected: dict[int, dict[str, Any]] = {}
     page_count = 0
 
@@ -93,7 +95,29 @@ def _collect_candle_rows(
             break
         if oldest_in_page <= start_ms:
             break
-        after = str(oldest_in_page)
+        next_after = oldest_in_page
+        if previous_after_int is not None and next_after >= previous_after_int:
+            # Defensive guard: if cursor does not move backward, force it to move
+            # to avoid paging the same slice forever.
+            pagination_stall_count += 1
+            next_after = previous_after_int - 1
+            if on_progress is not None:
+                on_progress(
+                    {
+                        "dataset": dataset,
+                        "page_count": page_count,
+                        "rows_collected": len(collected),
+                        "oldest_in_page": oldest_in_page,
+                        "pagination_stall_count": pagination_stall_count,
+                        "pagination_stall_breaker": True,
+                    }
+                )
+            if next_after <= start_ms or pagination_stall_count >= 5:
+                break
+        else:
+            pagination_stall_count = 0
+        after = str(next_after)
+        previous_after_int = next_after
 
     return [collected[key] for key in sorted(collected)]
 
@@ -108,6 +132,8 @@ def _collect_funding_rows(
 ) -> list[dict[str, Any]]:
     # Use end_ms as the first cursor to avoid paging from latest market data.
     after: str | None = str(end_ms)
+    previous_after_int: int | None = int(after)
+    pagination_stall_count = 0
     collected: dict[int, dict[str, Any]] = {}
     page_count = 0
 
@@ -139,7 +165,29 @@ def _collect_funding_rows(
             break
         if oldest_in_page <= start_ms:
             break
-        after = str(oldest_in_page)
+        next_after = oldest_in_page
+        if previous_after_int is not None and next_after >= previous_after_int:
+            # Defensive guard: if cursor does not move backward, force it to move
+            # to avoid paging the same slice forever.
+            pagination_stall_count += 1
+            next_after = previous_after_int - 1
+            if on_progress is not None:
+                on_progress(
+                    {
+                        "dataset": "funding",
+                        "page_count": page_count,
+                        "rows_collected": len(collected),
+                        "oldest_in_page": oldest_in_page,
+                        "pagination_stall_count": pagination_stall_count,
+                        "pagination_stall_breaker": True,
+                    }
+                )
+            if next_after <= start_ms or pagination_stall_count >= 5:
+                break
+        else:
+            pagination_stall_count = 0
+        after = str(next_after)
+        previous_after_int = next_after
 
     return [collected[key] for key in sorted(collected)]
 

@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 from full_data_extraction_for_btc.services.time_windows import bar_to_ms
 
+FUNDING_STEP_MS = 8 * 60 * 60 * 1000
+
 
 def day_index_file_path(output_root: Path, instrument_id: str, dataset_path: str, bar: str, tz_name: str) -> Path:
     safe_bar = "".join(ch if ch.isalnum() else "_" for ch in bar)
@@ -38,6 +40,19 @@ def month_index_file_path(output_root: Path, instrument_id: str, dataset_path: s
     )
 
 
+def quarter_index_file_path(output_root: Path, instrument_id: str, dataset_path: str, bar: str, tz_name: str) -> Path:
+    safe_bar = "".join(ch if ch.isalnum() else "_" for ch in bar)
+    safe_tz = "".join(ch if ch.isalnum() else "_" for ch in tz_name)
+    return (
+        output_root
+        / "okx"
+        / instrument_id
+        / "metadata"
+        / "quarter_indexes"
+        / f"{dataset_path}__bar={safe_bar}__tz={safe_tz}.json"
+    )
+
+
 def load_day_index(output_root: Path, instrument_id: str, dataset_path: str, bar: str, tz_name: str) -> set[str]:
     path = day_index_file_path(output_root, instrument_id, dataset_path, bar, tz_name)
     return _load_index_values(path, field="days")
@@ -46,6 +61,11 @@ def load_day_index(output_root: Path, instrument_id: str, dataset_path: str, bar
 def load_month_index(output_root: Path, instrument_id: str, dataset_path: str, bar: str, tz_name: str) -> set[str]:
     path = month_index_file_path(output_root, instrument_id, dataset_path, bar, tz_name)
     return _load_index_values(path, field="months")
+
+
+def load_quarter_index(output_root: Path, instrument_id: str, dataset_path: str, bar: str, tz_name: str) -> set[str]:
+    path = quarter_index_file_path(output_root, instrument_id, dataset_path, bar, tz_name)
+    return _load_index_values(path, field="quarters")
 
 
 def save_day_index(
@@ -88,6 +108,39 @@ def save_month_index(
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
 
 
+def save_quarter_index(
+    output_root: Path,
+    instrument_id: str,
+    dataset_path: str,
+    bar: str,
+    tz_name: str,
+    quarters: set[str],
+) -> None:
+    path = quarter_index_file_path(output_root, instrument_id, dataset_path, bar, tz_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "dataset": dataset_path,
+        "bar": bar,
+        "timezone": tz_name,
+        "quarters": sorted(quarters),
+        "updated_at": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+
+
+def month_to_quarter_key(month_key: str) -> str | None:
+    try:
+        year_str, month_str = month_key.split("-", 1)
+        year = int(year_str)
+        month = int(month_str)
+    except (ValueError, TypeError):
+        return None
+    if month < 1 or month > 12:
+        return None
+    quarter = ((month - 1) // 3) + 1
+    return f"{year:04d}-Q{quarter}"
+
+
 def compute_complete_months(days: set[str]) -> set[str]:
     by_month: dict[tuple[int, int], set[int]] = {}
     for day in days:
@@ -107,6 +160,29 @@ def compute_complete_months(days: set[str]) -> set[str]:
     return complete
 
 
+def compute_complete_quarters(months: set[str]) -> set[str]:
+    by_quarter: dict[str, set[str]] = {}
+    for month_key in months:
+        quarter_key = month_to_quarter_key(month_key)
+        if quarter_key is None:
+            continue
+        by_quarter.setdefault(quarter_key, set()).add(month_key)
+
+    complete: set[str] = set()
+    for quarter_key, quarter_months in by_quarter.items():
+        try:
+            year_str, quarter_str = quarter_key.split("-Q", 1)
+            year = int(year_str)
+            quarter = int(quarter_str)
+        except (ValueError, TypeError):
+            continue
+        month_start = (quarter - 1) * 3 + 1
+        expected = {f"{year:04d}-{month_start + offset:02d}" for offset in range(3)}
+        if quarter_months == expected:
+            complete.add(quarter_key)
+    return complete
+
+
 def persist_day_and_month_indexes(
     output_root: Path,
     instrument_id: str,
@@ -116,9 +192,21 @@ def persist_day_and_month_indexes(
     days: set[str],
 ) -> set[str]:
     months = compute_complete_months(days)
+    quarters = compute_complete_quarters(months)
     save_day_index(output_root, instrument_id, dataset_path, bar, tz_name, days)
     save_month_index(output_root, instrument_id, dataset_path, bar, tz_name, months)
+    save_quarter_index(output_root, instrument_id, dataset_path, bar, tz_name, quarters)
     return months
+
+
+def resolve_dataset_step_ms(dataset_path: str, bar: str) -> int | None:
+    if dataset_path == "funding_rates":
+        return FUNDING_STEP_MS
+    return bar_to_ms(bar)
+
+
+def resolve_dataset_primary_key(dataset_path: str) -> str:
+    return "funding_time" if dataset_path == "funding_rates" else "ts"
 
 
 def is_local_day_continuous(
@@ -129,7 +217,7 @@ def is_local_day_continuous(
     day_end_ms: int,
     bar: str,
 ) -> bool:
-    step_ms = bar_to_ms(bar)
+    step_ms = resolve_dataset_step_ms(dataset_path=dataset_path, bar=bar)
     if step_ms is None or day_end_ms <= day_start_ms:
         return False
 
@@ -137,11 +225,12 @@ def is_local_day_continuous(
     if not dataset_root.exists():
         return False
 
+    primary_key = resolve_dataset_primary_key(dataset_path)
     existing_ts: set[int] = set()
     for path in sorted(dataset_root.glob("year=*/month=*/data.csv.gz")):
         with gzip.open(path, "rt", encoding="utf-8", newline="") as handle:
             for row in csv.DictReader(handle):
-                raw_ts = row.get("ts")
+                raw_ts = row.get(primary_key)
                 if not raw_ts:
                     continue
                 try:
@@ -164,21 +253,23 @@ def rebuild_day_and_month_index(
     tz_name: str,
     on_day_checked: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[int, int, int]:
-    step_ms = bar_to_ms(bar)
+    step_ms = resolve_dataset_step_ms(dataset_path=dataset_path, bar=bar)
     if step_ms is None:
-        raise ValueError(f"unsupported bar for day index: {bar}")
+        raise ValueError(f"unsupported continuity step: dataset={dataset_path} bar={bar}")
 
     dataset_root = output_root / "okx" / instrument_id / dataset_path
     if not dataset_root.exists():
         save_day_index(output_root, instrument_id, dataset_path, bar, tz_name, days=set())
         save_month_index(output_root, instrument_id, dataset_path, bar, tz_name, months=set())
+        save_quarter_index(output_root, instrument_id, dataset_path, bar, tz_name, quarters=set())
         return 0, 0, 0
 
+    primary_key = resolve_dataset_primary_key(dataset_path)
     existing_ts: set[int] = set()
     for path in sorted(dataset_root.glob("year=*/month=*/data.csv.gz")):
         with gzip.open(path, "rt", encoding="utf-8", newline="") as handle:
             for row in csv.DictReader(handle):
-                raw_ts = row.get("ts")
+                raw_ts = row.get(primary_key)
                 if not raw_ts:
                     continue
                 try:
@@ -189,6 +280,7 @@ def rebuild_day_and_month_index(
     if not existing_ts:
         save_day_index(output_root, instrument_id, dataset_path, bar, tz_name, days=set())
         save_month_index(output_root, instrument_id, dataset_path, bar, tz_name, months=set())
+        save_quarter_index(output_root, instrument_id, dataset_path, bar, tz_name, quarters=set())
         return 0, 0, 0
 
     tz = ZoneInfo(tz_name)

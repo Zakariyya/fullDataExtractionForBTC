@@ -1,0 +1,10 @@
+{
+  "dataset": "funding_rates",
+  "bar": "1m",
+  "timezone": "UTC",
+  "months": [
+    "2026-02",
+    "2026-03"
+  ],
+  "updated_at": "2026-04-26T15:01:33Z"
+}

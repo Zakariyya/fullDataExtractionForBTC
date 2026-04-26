@@ -9,6 +9,7 @@ import csv
 import gzip
 
 from full_data_extraction_for_btc.service import DownloadService, _day_index_file_path, _month_index_file_path
+from full_data_extraction_for_btc.services.continuity_index import quarter_index_file_path
 
 
 class FakeClient:
@@ -100,29 +101,15 @@ class ServiceTests(unittest.TestCase):
                 self.assertEqual(snapshot.status, "completed")
                 self.assertEqual(len(snapshot.summaries), 2)
 
-    def test_download_skips_day_when_local_data_is_continuous(self) -> None:
+    def test_download_without_index_still_collects_day(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            data_path = root / "data" / "okx" / "BTC-USDT-SWAP" / "candles" / "year=2024" / "month=03" / "data.csv.gz"
-            data_path.parent.mkdir(parents=True, exist_ok=True)
-            day_start = int(datetime(2024, 3, 1, tzinfo=timezone.utc).timestamp() * 1000)
-            with gzip.open(data_path, "wt", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=["ts", "iso_time", "open", "high", "low", "close"])
-                writer.writeheader()
-                writer.writerow(
-                    {
-                        "ts": str(day_start),
-                        "iso_time": "2024-03-01T00:00:00Z",
-                        "open": "100",
-                        "high": "101",
-                        "low": "99",
-                        "close": "100.5",
-                    }
-                )
-
             service = DownloadService(root, client_factory=lambda _base_url: FakeClient())
 
-            with patch("full_data_extraction_for_btc.service.collect_dataset_rows") as mocked_collect:
+            def fake_collect(**kwargs):  # noqa: ANN001
+                return [{"ts": kwargs["start_ms"], "iso_time": "2024-03-01T00:00:00Z", "close": "100"}]
+
+            with patch("full_data_extraction_for_btc.service.collect_dataset_rows", side_effect=fake_collect) as mocked_collect:
                 task = service.start_download(
                     {
                         "start": "2024-03-01",
@@ -146,12 +133,11 @@ class ServiceTests(unittest.TestCase):
                 snapshot = service.get_task(task.task_id)
                 self.assertIsNotNone(snapshot)
                 self.assertEqual(snapshot.status, "completed")
-                self.assertEqual(mocked_collect.call_count, 0)
+                self.assertEqual(mocked_collect.call_count, 1)
                 assert snapshot is not None
                 events = [json.loads(item) for item in snapshot.events_history]
-                skip_events = [evt for evt in events if evt.get("type") == "dataset_day_skipped"]
-                self.assertTrue(skip_events)
-                self.assertEqual(skip_events[0].get("reason"), "local_data_continuous")
+                finished_events = [evt for evt in events if evt.get("type") == "dataset_day_finished"]
+                self.assertTrue(finished_events)
 
     def test_download_emits_day_minute_progress_for_candles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -322,6 +308,61 @@ class ServiceTests(unittest.TestCase):
                 skip_events = [evt for evt in events if evt.get("type") == "dataset_month_skipped"]
                 self.assertTrue(skip_events)
                 self.assertEqual(skip_events[0].get("reason"), "month_index_hit")
+
+    def test_download_skips_day_when_quarter_index_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            quarter_path = quarter_index_file_path(
+                output_root=root / "data",
+                instrument_id="BTC-USDT-SWAP",
+                dataset_path="candles",
+                bar="1d",
+                tz_name="UTC",
+            )
+            quarter_path.parent.mkdir(parents=True, exist_ok=True)
+            quarter_path.write_text(
+                json.dumps(
+                    {
+                        "dataset": "candles",
+                        "bar": "1d",
+                        "timezone": "UTC",
+                        "quarters": ["2024-Q1"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            service = DownloadService(root, client_factory=lambda _base_url: FakeClient())
+            with patch("full_data_extraction_for_btc.service.collect_dataset_rows") as mocked_collect:
+                task = service.start_download(
+                    {
+                        "start": "2024-03-01",
+                        "end": "2024-03-02",
+                        "datasets": ["candles"],
+                        "instrument_id": "BTC-USDT-SWAP",
+                        "bar": "1d",
+                        "output_subdir": "data",
+                        "base_url": "https://www.okx.com",
+                        "input_timezone": "UTC",
+                    }
+                )
+
+                deadline = time.time() + 3
+                while time.time() < deadline:
+                    snapshot = service.get_task(task.task_id)
+                    if snapshot is not None and snapshot.status in {"completed", "failed"}:
+                        break
+                    time.sleep(0.05)
+
+                snapshot = service.get_task(task.task_id)
+                self.assertIsNotNone(snapshot)
+                self.assertEqual(snapshot.status, "completed")
+                self.assertEqual(mocked_collect.call_count, 0)
+                assert snapshot is not None
+                events = [json.loads(item) for item in snapshot.events_history]
+                skip_events = [evt for evt in events if evt.get("type") == "dataset_month_skipped"]
+                self.assertTrue(skip_events)
+                self.assertEqual(skip_events[0].get("reason"), "quarter_index_hit")
 
     def test_rebuild_index_generates_day_index_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

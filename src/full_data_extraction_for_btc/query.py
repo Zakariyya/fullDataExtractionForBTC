@@ -42,7 +42,7 @@ def build_data_summary(
     expected_days = _build_expected_day_keys(start=start, end=end)
     if expected_days:
         for dataset_path in partitions.keys():
-            if dataset_path not in {"candles", "mark_price_candles", "index_candles"}:
+            if dataset_path not in {"candles", "mark_price_candles", "index_candles", "funding_rates"}:
                 continuity[dataset_path] = {
                     "source": "not_applicable",
                     "bar": bar,

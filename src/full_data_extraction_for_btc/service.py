@@ -11,16 +11,20 @@ from pathlib import Path
 from typing import Any, Callable
 
 from full_data_extraction_for_btc.client import OkxPublicClient
-from full_data_extraction_for_btc.downloader import CANDLE_DATASETS, DATASET_TO_PATH, collect_dataset_rows
+from full_data_extraction_for_btc.downloader import DATASET_TO_PATH, collect_dataset_rows
 from full_data_extraction_for_btc.services.continuity_index import (
     compute_complete_months,
+    compute_complete_quarters,
     day_index_file_path,
-    is_local_day_continuous,
     load_day_index,
     load_month_index,
+    load_quarter_index,
+    month_to_quarter_key,
     month_index_file_path,
     persist_day_and_month_indexes,
     rebuild_day_and_month_index,
+    resolve_dataset_primary_key,
+    resolve_dataset_step_ms,
 )
 from full_data_extraction_for_btc.services.event_logging import log_terminal_event
 from full_data_extraction_for_btc.services.models import DownloadTask
@@ -155,7 +159,7 @@ class DownloadService:
             summaries: list[dict[str, Any]] = []
             for dataset in datasets:
                 self._emit(task, {"type": "dataset_started", "dataset": dataset})
-                if dataset in CANDLE_DATASETS:
+                if dataset in DATASET_TO_PATH:
                     summary = self._download_candle_dataset(
                         task=task,
                         storage=storage,
@@ -171,22 +175,7 @@ class DownloadService:
                         end_ms=end_ms,
                     )
                 else:
-                    rows = collect_dataset_rows(
-                        client=client,
-                        dataset=dataset,
-                        instrument_id=instrument_id,
-                        bar=bar,
-                        start_ms=start_ms,
-                        end_ms=end_ms,
-                        on_progress=lambda payload, ds=dataset: self._emit(
-                            task, {"type": "dataset_progress", "dataset": ds, **payload}
-                        ),
-                    )
-                    summary = storage.write_rows(
-                        DATASET_TO_PATH[dataset],
-                        rows,
-                        primary_key="funding_time" if dataset == "funding" else "ts",
-                    )
+                    raise ValueError(f"unsupported dataset: {dataset}")
 
                 summary["requested_dataset"] = dataset
                 if dataset == "funding":
@@ -231,6 +220,17 @@ class DownloadService:
             bar=bar,
             tz_name=input_tz,
         )
+        quarter_index = load_quarter_index(
+            output_root=output,
+            instrument_id=instrument_id,
+            dataset_path=dataset_path,
+            bar=bar,
+            tz_name=input_tz,
+        )
+        primary_key = resolve_dataset_primary_key(dataset_path)
+        step_ms = resolve_dataset_step_ms(dataset_path=dataset_path, bar=bar)
+        if step_ms is None:
+            raise ValueError(f"unsupported continuity step: dataset={dataset_path} bar={bar}")
 
         index_dirty = False
         computed_months = compute_complete_months(day_index)
@@ -249,6 +249,9 @@ class DownloadService:
         if missing_months:
             index_dirty = True
         month_index = reconciled_month_index
+        computed_quarters = compute_complete_quarters(month_index)
+        reconciled_quarter_index = set(quarter_index) | computed_quarters
+        quarter_index = reconciled_quarter_index
 
         rows_written_total = 0
         min_ts: int | None = None
@@ -320,6 +323,28 @@ class DownloadService:
                 for month_key in ordered_months:
                     month_pending: list[dict[str, Any]] = []
                     month_windows = windows_by_month[month_key]
+                    quarter_key = month_to_quarter_key(month_key)
+
+                    if quarter_key is not None and quarter_key in quarter_index:
+                        if month_key not in month_skip_emitted:
+                            month_skip_emitted.add(month_key)
+                            hit_days = requested_days_by_month.get(month_key, [])
+                            self._emit(
+                                task,
+                                {
+                                    "type": "dataset_month_skipped",
+                                    "dataset": dataset,
+                                    "month": month_key,
+                                    "days": hit_days,
+                                    "days_count": len(hit_days),
+                                    "reason": "quarter_index_hit",
+                                    "quarter": quarter_key,
+                                },
+                            )
+                        checked_days += len(month_windows)
+                        if month_windows:
+                            _emit_check_progress(day=format_day_key(month_windows[-1][0], tz_name=input_tz), month=month_key)
+                        continue
 
                     if month_key in month_index:
                         if month_key not in month_skip_emitted:
@@ -374,50 +399,6 @@ class DownloadService:
                             },
                         )
 
-                        if is_local_day_continuous(
-                            output_root=output,
-                            instrument_id=instrument_id,
-                            dataset_path=dataset_path,
-                            day_start_ms=day_start_ms,
-                            day_end_ms=day_end_ms,
-                            bar=bar,
-                        ):
-                            if day_key not in day_index:
-                                day_index.add(day_key)
-                                index_dirty = True
-                                self._emit(
-                                    task,
-                                    {
-                                        "type": "dataset_day_index_added",
-                                        "dataset": dataset,
-                                        "day": day_key,
-                                        "source": "continuity_check",
-                                    },
-                                )
-                                month_index = self._update_month_index(
-                                    task=task,
-                                    dataset=dataset,
-                                    day_index=day_index,
-                                    month_index=month_index,
-                                    source="continuity_check",
-                                )
-
-                            self._emit(
-                                task,
-                                {
-                                    "type": "dataset_day_skipped",
-                                    "dataset": dataset,
-                                    "day": day_key,
-                                    "day_start_ms": day_start_ms,
-                                    "day_end_ms": day_end_ms,
-                                    "total_minutes": day_total_minutes,
-                                    "reason": "local_data_continuous",
-                                },
-                            )
-                            checked_days += 1
-                            _emit_check_progress(day=day_key, month=month_key)
-                            continue
-
                         month_pending.append(
                             {
                                 "day_key": day_key,
@@ -445,7 +426,7 @@ class DownloadService:
 
                 for future in as_completed(futures):
                     for plan, day_rows in future.result():
-                        rows_written_total, min_ts, max_ts, index_dirty, month_index = self._process_downloaded_day(
+                        rows_written_total, min_ts, max_ts, index_dirty, month_index, quarter_index = self._process_downloaded_day(
                             task=task,
                             storage=storage,
                             dataset=dataset,
@@ -457,6 +438,9 @@ class DownloadService:
                             day_rows=day_rows,
                             day_index=day_index,
                             month_index=month_index,
+                            quarter_index=quarter_index,
+                            primary_key=primary_key,
+                            step_ms=step_ms,
                             rows_written_total=rows_written_total,
                             min_ts=min_ts,
                             max_ts=max_ts,
@@ -467,6 +451,27 @@ class DownloadService:
             for month_key in ordered_months:
                 month_pending: list[dict[str, Any]] = []
                 month_windows = windows_by_month[month_key]
+                quarter_key = month_to_quarter_key(month_key)
+                if quarter_key is not None and quarter_key in quarter_index:
+                    if month_key not in month_skip_emitted:
+                        month_skip_emitted.add(month_key)
+                        hit_days = requested_days_by_month.get(month_key, [])
+                        self._emit(
+                            task,
+                            {
+                                "type": "dataset_month_skipped",
+                                "dataset": dataset,
+                                "month": month_key,
+                                "days": hit_days,
+                                "days_count": len(hit_days),
+                                "reason": "quarter_index_hit",
+                                "quarter": quarter_key,
+                            },
+                        )
+                    checked_days += len(month_windows)
+                    if month_windows:
+                        _emit_check_progress(day=format_day_key(month_windows[-1][0], tz_name=input_tz), month=month_key)
+                    continue
                 if month_key in month_index:
                     if month_key not in month_skip_emitted:
                         month_skip_emitted.add(month_key)
@@ -520,50 +525,6 @@ class DownloadService:
                         },
                     )
 
-                    if is_local_day_continuous(
-                        output_root=output,
-                        instrument_id=instrument_id,
-                        dataset_path=dataset_path,
-                        day_start_ms=day_start_ms,
-                        day_end_ms=day_end_ms,
-                        bar=bar,
-                    ):
-                        if day_key not in day_index:
-                            day_index.add(day_key)
-                            index_dirty = True
-                            self._emit(
-                                task,
-                                {
-                                    "type": "dataset_day_index_added",
-                                    "dataset": dataset,
-                                    "day": day_key,
-                                    "source": "continuity_check",
-                                },
-                            )
-                            month_index = self._update_month_index(
-                                task=task,
-                                dataset=dataset,
-                                day_index=day_index,
-                                month_index=month_index,
-                                source="continuity_check",
-                            )
-
-                        self._emit(
-                            task,
-                            {
-                                "type": "dataset_day_skipped",
-                                "dataset": dataset,
-                                "day": day_key,
-                                "day_start_ms": day_start_ms,
-                                "day_end_ms": day_end_ms,
-                                "total_minutes": day_total_minutes,
-                                "reason": "local_data_continuous",
-                            },
-                        )
-                        checked_days += 1
-                        _emit_check_progress(day=day_key, month=month_key)
-                        continue
-
                     month_pending.append(
                         {
                             "day_key": day_key,
@@ -585,7 +546,7 @@ class DownloadService:
                             bar=bar,
                             plan=plan,
                         )
-                        rows_written_total, min_ts, max_ts, index_dirty, month_index = self._process_downloaded_day(
+                        rows_written_total, min_ts, max_ts, index_dirty, month_index, quarter_index = self._process_downloaded_day(
                             task=task,
                             storage=storage,
                             dataset=dataset,
@@ -597,6 +558,9 @@ class DownloadService:
                             day_rows=day_rows,
                             day_index=day_index,
                             month_index=month_index,
+                            quarter_index=quarter_index,
+                            primary_key=primary_key,
+                            step_ms=step_ms,
                             rows_written_total=rows_written_total,
                             min_ts=min_ts,
                             max_ts=max_ts,
@@ -623,6 +587,7 @@ class DownloadService:
                 days=day_index,
             )
             month_index = updated_months
+            quarter_index = compute_complete_quarters(month_index)
             self._emit(
                 task,
                 {
@@ -630,6 +595,7 @@ class DownloadService:
                     "dataset": dataset,
                     "indexed_days": len(day_index),
                     "indexed_months": len(month_index),
+                    "indexed_quarters": len(quarter_index),
                     "bar": bar,
                     "timezone": input_tz,
                 },
@@ -748,19 +714,24 @@ class DownloadService:
         day_rows: list[dict[str, Any]],
         day_index: set[str],
         month_index: set[str],
+        quarter_index: set[str],
+        primary_key: str,
+        step_ms: int,
         rows_written_total: int,
         min_ts: int | None,
         max_ts: int | None,
         index_dirty: bool,
-    ) -> tuple[int, int | None, int | None, bool, set[str]]:
+    ) -> tuple[int, int | None, int | None, bool, set[str], set[str]]:
         day_key = plan["day_key"]
         day_start_ms = plan["day_start_ms"]
         day_end_ms = plan["day_end_ms"]
-        day_summary = storage.write_rows(dataset_path, day_rows, primary_key="ts")
+        day_summary = storage.write_rows(dataset_path, day_rows, primary_key=primary_key)
         rows_written_total += day_summary["rows_written"]
 
         if day_rows:
-            day_timestamps = [int(row["ts"]) for row in day_rows]
+            day_timestamps = [int(row[primary_key]) for row in day_rows if row.get(primary_key) is not None]
+            if not day_timestamps:
+                return rows_written_total, min_ts, max_ts, index_dirty, month_index, quarter_index
             day_min_ts = min(day_timestamps)
             day_max_ts = max(day_timestamps)
             min_ts = day_min_ts if min_ts is None else min(min_ts, day_min_ts)
@@ -779,13 +750,12 @@ class DownloadService:
             },
         )
 
-        if is_local_day_continuous(
-            output_root=output,
-            instrument_id=instrument_id,
-            dataset_path=dataset_path,
+        if self._is_day_complete_from_rows(
+            day_rows=day_rows,
             day_start_ms=day_start_ms,
             day_end_ms=day_end_ms,
-            bar=bar,
+            primary_key=primary_key,
+            step_ms=step_ms,
         ) and day_key not in day_index:
             day_index.add(day_key)
             index_dirty = True
@@ -798,15 +768,16 @@ class DownloadService:
                     "source": "post_write_validation",
                 },
             )
-            month_index = self._update_month_index(
+            month_index, quarter_index = self._update_month_index(
                 task=task,
                 dataset=dataset,
                 day_index=day_index,
                 month_index=month_index,
+                quarter_index=quarter_index,
                 source="post_write_validation",
             )
 
-        return rows_written_total, min_ts, max_ts, index_dirty, month_index
+        return rows_written_total, min_ts, max_ts, index_dirty, month_index, quarter_index
 
     def _update_month_index(
         self,
@@ -814,8 +785,9 @@ class DownloadService:
         dataset: str,
         day_index: set[str],
         month_index: set[str],
+        quarter_index: set[str],
         source: str,
-    ) -> set[str]:
+    ) -> tuple[set[str], set[str]]:
         computed_months = compute_complete_months(day_index)
         new_months = sorted(computed_months - month_index)
         for month in new_months:
@@ -828,7 +800,44 @@ class DownloadService:
                     "source": source,
                 },
             )
-        return computed_months
+        computed_quarters = compute_complete_quarters(computed_months)
+        new_quarters = sorted(computed_quarters - quarter_index)
+        for quarter in new_quarters:
+            self._emit(
+                task,
+                {
+                    "type": "dataset_quarter_index_added",
+                    "dataset": dataset,
+                    "quarter": quarter,
+                    "source": source,
+                },
+            )
+        return computed_months, computed_quarters
+
+    @staticmethod
+    def _is_day_complete_from_rows(
+        day_rows: list[dict[str, Any]],
+        day_start_ms: int,
+        day_end_ms: int,
+        primary_key: str,
+        step_ms: int,
+    ) -> bool:
+        if day_end_ms <= day_start_ms or step_ms <= 0:
+            return False
+        ts_set: set[int] = set()
+        for row in day_rows:
+            raw_ts = row.get(primary_key)
+            if raw_ts is None:
+                continue
+            try:
+                ts = int(raw_ts)
+            except (TypeError, ValueError):
+                continue
+            if day_start_ms <= ts < day_end_ms:
+                ts_set.add(ts)
+        if not ts_set:
+            return False
+        return all(ts in ts_set for ts in range(day_start_ms, day_end_ms, step_ms))
 
     def _run_rebuild_index_task(self, task_id: str) -> None:
         task = self.get_task(task_id)
@@ -849,13 +858,13 @@ class DownloadService:
         try:
             summaries: list[dict[str, Any]] = []
             for dataset in datasets:
-                if dataset not in CANDLE_DATASETS:
+                if dataset not in DATASET_TO_PATH:
                     self._emit(
                         task,
                         {
                             "type": "index_rebuild_dataset_skipped",
                             "dataset": dataset,
-                            "reason": "unsupported_for_day_continuity",
+                            "reason": "unsupported_dataset",
                         },
                     )
                     continue
@@ -878,6 +887,7 @@ class DownloadService:
                         "dataset": dataset_path,
                         "indexed_days": indexed_days,
                         "indexed_months": indexed_months,
+                        "indexed_quarters": len(load_quarter_index(output, instrument_id, dataset_path, bar, tz_name)),
                         "scanned_days": scanned_days,
                     }
                 )
@@ -888,6 +898,7 @@ class DownloadService:
                         "dataset": dataset,
                         "indexed_days": indexed_days,
                         "indexed_months": indexed_months,
+                        "indexed_quarters": len(load_quarter_index(output, instrument_id, dataset_path, bar, tz_name)),
                         "scanned_days": scanned_days,
                     },
                 )
