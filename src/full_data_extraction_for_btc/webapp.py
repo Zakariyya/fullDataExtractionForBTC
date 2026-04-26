@@ -27,6 +27,7 @@ class DownloadRequest(BaseModel):
     input_timezone: str = "UTC"
     output_subdir: str = "data"
     base_url: str = "https://www.okx.com"
+    download_workers: int = Field(default=5, ge=1, le=64)
 
 
 class RebuildIndexRequest(BaseModel):

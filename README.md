@@ -1,112 +1,123 @@
-# 🚀 BTC 永续历史数据下载工具（OKX）
+# 🚀 BTC 永续数据工作台（OKX）
 
-一个面向普通用户的本地工具：下载 `BTC-USDT-SWAP` 历史数据，支持网页工作台、任务日志、连续性索引与数据预览。
+面向普通用户的本地工具：下载 OKX 永续合约历史数据，并在网页里查看任务进度、日志与数据预览。
 
-## 🌐 语言版本
+🌐 英文版文档： [README.en.md](README.en.md)
 
-- 中文（当前）：[`README.md`](README.md)
-- English: [`README.en.md`](README.en.md)
+## ✨ 你可以用它做什么
 
-## ✨ 这个项目能做什么
+- 📥 一键下载多类数据：`candles` / `mark` / `index` / `funding`
+- 🖥️ 打开网页工作台，直接点按钮启动任务
+- 📡 实时查看 SSE 进度日志
+- 🧾 自动维护连续性索引（跳过已完整日期，减少重复下载）
+- 🔎 按时间范围预览数据，支持多周期 K 线查看
 
-- 下载多类历史数据：`candles` / `mark` / `index` / `funding`
-- 提供网页工作台（任务发起、进度日志、数据预览）
-- 提供 SSE 实时事件流
-- 提供日索引 + 月索引（用于时间连续性校验与跳过已完整数据）
+## 🤖 给 AI 代理的一句话（可直接复制）
 
-## 📂 输出路径说明
-
-默认输出根目录是你命令里的 `--output`（例如 `data`）。
-
-实际数据会写到：
-
-- `data/okx/BTC-USDT-SWAP/candles/`
-- `data/okx/BTC-USDT-SWAP/funding_rates/`
-- `data/okx/BTC-USDT-SWAP/index_candles/`
-- `data/okx/BTC-USDT-SWAP/mark_price_candles/`
-- `data/okx/BTC-USDT-SWAP/metadata/`
-
-你在命令里填的是下载数据集名：`candles,mark,index,funding`。  
-落盘目录会自动映射为上面 5 类路径。
-
-## 🧠 五类数据怎么用在量化策略里
-
-- `candles` 📈  
-  含成交价 OHLCV，是大多数策略的主输入（信号生成、回测撮合、波动率与成交量特征）。
-- `mark_price_candles` 🛡️  
-  标记价格视角，适合做合约风控与强平风险评估（避免只看成交价造成偏差）。
-- `index_candles` 🌍  
-  指数价格视角，常用于“市场基准价”判断（价差、偏离、过滤异常波动）。
-- `funding_rates` 💸  
-  资金费率，用于估算持仓成本/收益侵蚀，对中长持仓、套利和基差策略很关键。  
-  注意：OKX 公共接口仅近 3 个月。
-- `metadata` 🧾  
-  不是行情本体，包含合约信息、清单、日/月连续性索引。  
-  作用是保证数据治理：快速跳过已完整数据、追踪覆盖范围、辅助重建索引。
-
-## ✅ 推荐使用方式（轻松版）
-
-- 先用 `candles` 跑通策略主逻辑。
-- 再叠加 `funding_rates` 做真实成本校正。
-- 对永续合约风险敏感策略，再引入 `mark_price_candles`。
-- 需要做基准偏离或价差判断时，引入 `index_candles`。
-- 定期重建或刷新 `metadata` 索引，保证时间连续性可追踪。
-
-## ⚡ 免安装直接运行（仓库拿来即用）
-
-如果你只是直接拉仓库，不做 `pip install -e .`，推荐使用下面这种方式：
-
-```bash
-PYTHONPATH=src python3 -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766
+```
+你现在维护的项目是 `full-data-extraction-for-btc`（Python `>=3.10`，核心依赖 `fastapi`、`uvicorn`），请优先用 `python -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766` 启动网页服务（默认地址 `http://127.0.0.1:8766/`），下载命令使用 `python -m full_data_extraction_for_btc download --start <date> --end <date> --datasets candles,mark,index,funding --input-timezone Asia/Shanghai --bar 1m --output data`，并注意 OKX 公共接口的资金费率历史通常仅约最近 3 个月。
 ```
 
-打开：`http://127.0.0.1:8766/`
+## 🐍 底层 Python 环境要求（重要）
 
-下载示例：
+- Python 版本：`3.10+`
+- 建议命令优先使用 `python`（在虚拟环境内）
+- 建议先检查：
 
 ```bash
-PYTHONPATH=src python3 -m full_data_extraction_for_btc download \
+python3 --version
+python3 -m pip --version
+```
+
+## ✅ 标准启动流程（推荐）
+
+```bash
+# 1. 安装基础环境
+sudo apt update
+sudo apt install -y python3-pip python3-venv
+
+# 2. 创建虚拟环境
+python3 -m venv .venv
+
+# 3. 激活环境
+source .venv/bin/activate
+
+# 4. 安装依赖（关键）
+python -m pip install -U pip
+python -m pip install -e .
+
+# 5. 启动服务
+python -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766
+```
+
+👉 注意：
+
+- `-e .` 会读取 `pyproject.toml` 自动安装依赖（包含 `uvicorn`）
+- 完成后不需要再设置 `PYTHONPATH`
+- 浏览器打开：`http://127.0.0.1:8766/`
+
+## ⚡ uv 方式安装与启动（可选）
+
+如果你更喜欢用 `uv` 管理依赖和运行命令，可以用这套：
+
+```bash
+# 1) 安装 uv（如果尚未安装）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2) 进入项目
+cd /mnt/d/me/project/fullDataExtractionForBTC
+
+# 3) 创建/同步环境（会按 pyproject.toml + uv.lock 安装依赖）
+uv sync
+
+# 4) 启动服务
+uv run python -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766
+```
+
+## 📥 下载命令示例
+
+```bash
+python -m full_data_extraction_for_btc download \
   --start 2026-04-01 \
-  --end 2026-04-02 \
+  --end 2026-04-03 \
+  --datasets candles,mark,index,funding \
   --input-timezone Asia/Shanghai \
   --bar 1m \
-  --datasets candles,mark,index,funding \
   --output data
 ```
 
-运行测试（你指定的命令）：
+## 🖱️ 网页里常见操作
+
+- 启动下载：点击「启动下载」
+- 重建索引：点击「重建索引」
+- 看实时日志：查看「进度日志 (SSE)」
+- 看下载进度：查看「下载进度看板」
+- 看数据质量：点击「刷新摘要」
+- 看覆盖日期：点击「展开覆盖看板」+「刷新看板」
+
+## 🧪 运行测试
+
+使用推荐安装流程后：
+
+```bash
+pytest -q
+```
+
+如果你是直接源码运行（未 `pip install -e .`）：
 
 ```bash
 PYTHONPATH=src pytest -q
 ```
 
-## 🧰 推荐方式：新环境可编辑安装
+## ⚠️ 常见问题
 
-如果是长期开发或多人协作，建议先创建虚拟环境并安装项目：
+- 页面看起来没更新：先重启服务，再浏览器强刷（`Ctrl+F5`）
+- 模块导入失败：通常是没激活 `.venv` 或没执行 `pip install -e .`
+- funding 数据偏少：属于 OKX 公共接口历史窗口限制
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-pip install -e .
-pip install pytest
-```
+## 📝 文档风格约定（本仓库）
 
-之后可直接运行（无需 `PYTHONPATH=src`）：
-
-```bash
-python -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766
-pytest -q
-```
-
-## 🕒 时间字段说明
-
-- `ts` / `iso_time`：UTC（统一基准时间）
-- `local_time_cn`：北京时间（`Asia/Shanghai`）
-- `trade_date_cn`：北京时间自然日
-
-如果你希望和 OKX 国内时间视角对齐，下载时请使用 `--input-timezone Asia/Shanghai`。
-
-## ⚠️ 已知限制
-
-- `funding`（资金费率）受 OKX 公共接口限制，仅能获取最近约 3 个月历史。
+- 面向普通用户，先给可执行步骤，再给原理
+- 中英文双文档保持同步
+- 适度使用 emoji 提高扫描效率
+- 增加 `AI Quick Read`，方便 AI 直接抽取命令与约束

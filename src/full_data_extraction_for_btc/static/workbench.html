@@ -807,6 +807,9 @@
             <label>输出目录</label>
             <div class="readonly-field" id="outputSubdirDisplay">data</div>
             <input id="outputSubdir" type="hidden" value="data">
+
+            <label for="downloadWorkers">下载线程数</label>
+            <input id="downloadWorkers" type="number" min="1" max="64" step="1" value="5">
           </div>
           <div class="actions">
             <button class="btn-primary" id="startBtn">启动下载</button>
@@ -1170,6 +1173,18 @@
       if (outputSubdirDisplay && outputSubdirHidden) {
         outputSubdirDisplay.textContent = outputSubdirHidden.value || "data";
       }
+    }
+
+    function readDownloadWorkers() {
+      const input = document.getElementById("downloadWorkers");
+      const value = Number.parseInt((input?.value || "").trim(), 10);
+      if (!Number.isFinite(value) || value < 1) {
+        if (input) input.value = "5";
+        return 5;
+      }
+      const normalized = Math.min(64, value);
+      if (input) input.value = String(normalized);
+      return normalized;
     }
 
     function formatDateOnlyFromDate(date) {
@@ -1839,6 +1854,7 @@
       const dataset = payload.dataset || "unknown";
       const day = payload.day || "-";
       const key = `${dataset}:${day}`;
+      const checkKey = `check:${dataset}`;
       if (payload.type === "dataset_day_started") {
         setBoardCell(day, dataset, "running", {progressPct: 0});
         appendLog(`[${dataset}] ${day} 开始下载 | 总分钟数=${payload.total_minutes || 0}`);
@@ -1848,6 +1864,27 @@
         if (!dayBasedDatasets.has(dataset)) {
           setDatasetLevelCell(dataset, "running");
         }
+        return;
+      }
+      if (payload.type === "dataset_check_started") {
+        const total = Number(payload.total_days || 0);
+        upsertInlineLog(checkKey, `[${dataset}] 校验开始 | 总天数=${total}`);
+        return;
+      }
+      if (payload.type === "dataset_check_progress") {
+        const checked = Number(payload.checked_days || 0);
+        const total = Number(payload.total_days || 0);
+        const pct = Number(payload.progress_pct || 0).toFixed(2);
+        const month = payload.month || "-";
+        const currentDay = payload.day || "-";
+        upsertInlineLog(checkKey, `[${dataset}] 校验进度 ${checked}/${total} (${pct}%) | month=${month} 当前=${currentDay}`);
+        return;
+      }
+      if (payload.type === "dataset_check_finished") {
+        const checked = Number(payload.checked_days || 0);
+        const total = Number(payload.total_days || 0);
+        appendLog(`[${dataset}] 校验完成 | ${checked}/${total}`);
+        clearInlineLog(checkKey);
         return;
       }
       if (payload.type === "dataset_day_checking") {
@@ -1899,6 +1936,7 @@
         return;
       }
       if (payload.type === "dataset_finished") {
+        clearInlineLog(checkKey);
         if (!dayBasedDatasets.has(dataset)) {
           setDatasetLevelCell(dataset, "done", {rows: Number(payload.rows_written || 0)});
         }
@@ -1980,6 +2018,7 @@
         datasets,
         output_subdir: document.getElementById("outputSubdir").value.trim(),
         bar: "1m",
+        download_workers: readDownloadWorkers(),
       };
       const plannedDayCount = estimatePlannedDayCount(payload.start, payload.end);
       resetDownloadBoard(datasets, {plannedDayCount});

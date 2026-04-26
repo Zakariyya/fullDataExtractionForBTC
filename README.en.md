@@ -1,112 +1,129 @@
-# 🚀 BTC Perpetual Historical Data Downloader (OKX)
+# 🚀 BTC Perpetual Data Workbench (OKX)
 
-A local tool for everyday users to download `BTC-USDT-SWAP` historical data, with a web workbench, live task logs, continuity indexes, and quick data preview.
+A local, user-friendly tool to download OKX perpetual historical data and manage tasks in a web UI with live logs and preview.
 
-## 🌐 Language Versions
+🌐 中文版: [README.md](README.md)
 
-- 中文: [`README.md`](README.md)
-- English (current): [`README.en.md`](README.en.md)
+## ✨ What You Can Do
 
-## ✨ What This Project Does
+- 📥 Download multiple datasets: `candles` / `mark` / `index` / `funding`
+- 🖥️ Start tasks from a web page (no complex setup flow)
+- 📡 Watch live SSE progress logs
+- 🧾 Use continuity indexes to skip already complete days/months
+- 🔎 Preview data by date range and K-line interval
 
-- Downloads multiple datasets: `candles` / `mark` / `index` / `funding`
-- Provides a web workbench (start tasks, watch logs, preview data)
-- Streams live events via SSE
-- Maintains day index + month index for continuity checks and smart skip
+## 🤖 AI Quick Read
 
-## 📂 Output Paths
+- Project: `full-data-extraction-for-btc`
+- Python: `>=3.10`
+- Core deps: `fastapi`, `uvicorn`
+- Web start command:
+  - `python -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766`
+- CLI download command:
+  - `python -m full_data_extraction_for_btc download --start <date> --end <date> --datasets candles,mark,index,funding --input-timezone Asia/Shanghai --bar 1m --output data`
+- Default UI URL: `http://127.0.0.1:8766/`
+- Funding note: OKX public API usually provides only ~last 3 months for funding history
 
-The output root is your `--output` argument (for example `data`).
+## 🐍 Python Runtime Requirements
 
-Data is saved under:
-
-- `data/okx/BTC-USDT-SWAP/candles/`
-- `data/okx/BTC-USDT-SWAP/funding_rates/`
-- `data/okx/BTC-USDT-SWAP/index_candles/`
-- `data/okx/BTC-USDT-SWAP/mark_price_candles/`
-- `data/okx/BTC-USDT-SWAP/metadata/`
-
-Input dataset names in command are: `candles,mark,index,funding`.  
-They are automatically mapped to the five folders above.
-
-## 🧠 How Each Dataset Helps Quant Strategies
-
-- `candles` 📈  
-  Trade-price OHLCV. Core input for most models (signals, backtest execution, volatility/volume factors).
-- `mark_price_candles` 🛡️  
-  Mark-price perspective for derivatives risk control (reduces bias from trade-price-only assumptions).
-- `index_candles` 🌍  
-  Index-price perspective for benchmark/fair-value checks (spread, deviation, anomaly filters).
-- `funding_rates` 💸  
-  Funding cost stream for PnL realism, especially important for medium/long holding, basis and carry styles.  
-  Note: OKX public API only keeps recent ~3 months.
-- `metadata` 🧾  
-  Not market bars. Stores instrument snapshot, manifests, and day/month continuity indexes.  
-  Helps with data governance: skip complete ranges, verify coverage, rebuild continuity state.
-
-## ✅ Simple Recommended Workflow
-
-- Start with `candles` to build and validate the core signal logic.
-- Add `funding_rates` to model real holding costs.
-- Add `mark_price_candles` if liquidation/risk behavior matters.
-- Add `index_candles` for spread/deviation and fair-value style filters.
-- Keep `metadata` indexes healthy (refresh/rebuild when needed) for continuity quality.
-
-## ⚡ Run Without Installation (Clone-and-Run)
-
-If you clone this repo and do not install it (`pip install -e .`), use:
+- Python version: `3.10+`
+- Prefer using `python` inside a virtual environment
+- Quick check:
 
 ```bash
-PYTHONPATH=src python3 -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766
+python3 --version
+python3 -m pip --version
 ```
 
-Open: `http://127.0.0.1:8766/`
-
-Download example:
+## ✅ Standard Startup Flow (Recommended)
 
 ```bash
-PYTHONPATH=src python3 -m full_data_extraction_for_btc download \
+# 1. Install base environment
+sudo apt update
+sudo apt install -y python3-pip python3-venv
+
+# 2. Create virtual environment
+python3 -m venv .venv
+
+# 3. Activate environment
+source .venv/bin/activate
+
+# 4. Install dependencies (important)
+python -m pip install -U pip
+python -m pip install -e .
+
+# 5. Start service
+python -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766
+```
+
+👉 Notes:
+
+- `-e .` reads `pyproject.toml` and installs dependencies automatically (including `uvicorn`)
+- After that, no `PYTHONPATH` is needed
+- Open UI at: `http://127.0.0.1:8766/`
+
+## ⚡ Optional: uv Workflow
+
+If you prefer `uv` for dependency/runtime management:
+
+```bash
+# 1) Install uv (if not installed yet)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2) Enter project
+cd /mnt/d/me/project/fullDataExtractionForBTC
+
+# 3) Sync environment from pyproject.toml + uv.lock
+uv sync
+
+# 4) Start service
+uv run python -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766
+```
+
+## 📥 Download Example
+
+```bash
+python -m full_data_extraction_for_btc download \
   --start 2026-04-01 \
-  --end 2026-04-02 \
+  --end 2026-04-03 \
+  --datasets candles,mark,index,funding \
   --input-timezone Asia/Shanghai \
   --bar 1m \
-  --datasets candles,mark,index,funding \
   --output data
 ```
 
-Run tests (exact command requested):
+## 🖱️ Common UI Actions
+
+- Start download: click `启动下载`
+- Rebuild index: click `重建索引`
+- View live logs: `进度日志 (SSE)`
+- View progress board: `下载进度看板`
+- Refresh quality summary: `刷新摘要`
+- Refresh coverage board: `展开覆盖看板` + `刷新看板`
+
+## 🧪 Run Tests
+
+After recommended installation:
+
+```bash
+pytest -q
+```
+
+If you run directly from source (without `pip install -e .`):
 
 ```bash
 PYTHONPATH=src pytest -q
 ```
 
-## 🧰 Recommended for New Environments: Editable Install
+## ⚠️ Common Issues
 
-For long-term use or team collaboration:
+- UI looks old: restart service and hard refresh browser (`Ctrl+F5`)
+- Import error: usually `.venv` is not active or `pip install -e .` was skipped
+- Limited funding history: expected due to OKX public API window
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-pip install -e .
-pip install pytest
-```
+## 📝 Documentation Style (This Repo)
 
-Then run commands without `PYTHONPATH=src`:
-
-```bash
-python -m full_data_extraction_for_btc serve --host 127.0.0.1 --port 8766
-pytest -q
-```
-
-## 🕒 Time Fields
-
-- `ts` / `iso_time`: UTC (source of truth)
-- `local_time_cn`: China local time (`Asia/Shanghai`)
-- `trade_date_cn`: China local calendar date
-
-For OKX CN app style date boundaries, use `--input-timezone Asia/Shanghai`.
-
-## ⚠️ Known Limitation
-
-- `funding` history from the OKX public API is limited to roughly the most recent 3 months.
+- User-first writing: executable steps first, deeper details second
+- Keep Chinese and English docs aligned
+- Use emoji to improve scan readability
+- Keep an `AI Quick Read` block for fast model parsing

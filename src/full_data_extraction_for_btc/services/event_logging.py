@@ -33,11 +33,41 @@ def log_terminal_event(payload: dict[str, Any]) -> None:
         )
         return
     if event_type == "dataset_day_checking":
+        # Suppress per-day checking spam in terminal logs.
+        return
+    if event_type == "dataset_check_started":
         LOGGER.info(
-            "[%s] %s checking | total_minutes=%s",
+            "[%s] checking started | total_days=%s months=%s",
             payload.get("dataset"),
+            payload.get("total_days"),
+            payload.get("months"),
+        )
+        return
+    if event_type == "dataset_check_progress":
+        LOGGER.info(
+            "[%s] checking progress | %s/%s (%s%%) month=%s day=%s",
+            payload.get("dataset"),
+            payload.get("checked_days"),
+            payload.get("total_days"),
+            payload.get("progress_pct"),
+            payload.get("month"),
             payload.get("day"),
-            payload.get("total_minutes"),
+        )
+        return
+    if event_type == "dataset_check_finished":
+        LOGGER.info(
+            "[%s] checking finished | %s/%s",
+            payload.get("dataset"),
+            payload.get("checked_days"),
+            payload.get("total_days"),
+        )
+        return
+    if event_type == "dataset_month_skipped":
+        LOGGER.info(
+            "[%s] %s month-index-hit skipped | days=%s",
+            payload.get("dataset"),
+            payload.get("month"),
+            payload.get("days_count"),
         )
         return
     if event_type == "dataset_day_finished":

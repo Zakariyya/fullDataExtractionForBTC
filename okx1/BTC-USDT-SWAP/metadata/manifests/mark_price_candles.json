@@ -1,0 +1,8 @@
+{
+  "dataset": "mark_price_candles",
+  "rows_in_batch": 1440,
+  "min_ts": 1776902400000,
+  "max_ts": 1776988740000,
+  "min_iso_time": "2026-04-23T00:00:00Z",
+  "max_iso_time": "2026-04-23T23:59:00Z"
+}

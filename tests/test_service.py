@@ -17,6 +17,52 @@ class FakeClient:
 
 
 class ServiceTests(unittest.TestCase):
+    def test_download_parallel_workers_follow_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            service = DownloadService(Path(tmp), client_factory=lambda _base_url: FakeClient())
+
+            def fake_collect(**_kwargs):  # noqa: ANN001
+                return [{"ts": 1710000000000, "iso_time": "2024-03-09T16:00:00Z", "close": "100"}]
+
+            with patch("full_data_extraction_for_btc.service.collect_dataset_rows", side_effect=fake_collect):
+                task = service.start_download(
+                    {
+                        "start": "2024-01-31",
+                        "end": "2024-02-02",
+                        "datasets": ["candles"],
+                        "instrument_id": "BTC-USDT-SWAP",
+                        "bar": "1m",
+                        "output_subdir": "data",
+                        "base_url": "https://www.okx.com",
+                        "input_timezone": "UTC",
+                        "download_workers": 2,
+                    }
+                )
+
+                deadline = time.time() + 3
+                while time.time() < deadline:
+                    snapshot = service.get_task(task.task_id)
+                    if snapshot is not None and snapshot.status in {"completed", "failed"}:
+                        break
+                    time.sleep(0.05)
+
+                snapshot = service.get_task(task.task_id)
+                self.assertIsNotNone(snapshot)
+                assert snapshot is not None
+                self.assertEqual(snapshot.status, "completed")
+                events = [json.loads(item) for item in snapshot.events_history]
+                parallel_events = [evt for evt in events if evt.get("type") == "dataset_parallel_started"]
+                self.assertTrue(parallel_events)
+                self.assertEqual(parallel_events[0].get("workers"), 2)
+                self.assertEqual(parallel_events[0].get("requested_workers"), 2)
+
+    def test_normalize_download_workers(self) -> None:
+        self.assertEqual(DownloadService._normalize_download_workers(None), 5)
+        self.assertEqual(DownloadService._normalize_download_workers(""), 5)
+        self.assertEqual(DownloadService._normalize_download_workers("7"), 7)
+        self.assertEqual(DownloadService._normalize_download_workers(0), 1)
+        self.assertEqual(DownloadService._normalize_download_workers(999), 64)
+
     def test_download_task_completes_and_writes_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             service = DownloadService(Path(tmp), client_factory=lambda _base_url: FakeClient())

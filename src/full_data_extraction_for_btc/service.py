@@ -139,6 +139,7 @@ class DownloadService:
         base_url = request["base_url"]
         output = self.output_root / request["output_subdir"]
         input_tz = request.get("input_timezone", "UTC")
+        download_workers = self._normalize_download_workers(request.get("download_workers"))
         start_ms = parse_datetime_input(request["start"], default_timezone=input_tz)
         end_ms = parse_datetime_input(request["end"], default_timezone=input_tz)
 
@@ -164,6 +165,7 @@ class DownloadService:
                         base_url=base_url,
                         bar=bar,
                         input_tz=input_tz,
+                        download_workers=download_workers,
                         output=output,
                         start_ms=start_ms,
                         end_ms=end_ms,
@@ -210,6 +212,7 @@ class DownloadService:
         base_url: str,
         bar: str,
         input_tz: str,
+        download_workers: int,
         output: Path,
         start_ms: int,
         end_ms: int,
@@ -256,140 +259,190 @@ class DownloadService:
             reverse=True,
         )
         request_month_count = len({format_day_key(day_start_ms, tz_name=input_tz)[:7] for day_start_ms, _ in all_windows})
-        pending_by_month: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        windows_by_month: dict[str, list[tuple[int, int]]] = defaultdict(list)
         requested_days_by_month: dict[str, list[str]] = defaultdict(list)
         month_skip_emitted: set[str] = set()
-
-        for day_start_ms, _day_end_ms in all_windows:
-            day_key = format_day_key(day_start_ms, tz_name=input_tz)
-            requested_days_by_month[day_key[:7]].append(day_key)
+        total_days_to_check = len(all_windows)
+        checked_days = 0
 
         for day_start_ms, day_end_ms in all_windows:
             day_key = format_day_key(day_start_ms, tz_name=input_tz)
             month_key = day_key[:7]
-            day_total_minutes = calc_total_minutes(day_start_ms, day_end_ms)
+            requested_days_by_month[month_key].append(day_key)
+            windows_by_month[month_key].append((day_start_ms, day_end_ms))
 
-            if month_key in month_index:
-                if month_key not in month_skip_emitted:
-                    month_skip_emitted.add(month_key)
-                    hit_days = requested_days_by_month.get(month_key, [])
-                    self._emit(
-                        task,
-                        {
-                            "type": "dataset_month_skipped",
-                            "dataset": dataset,
-                            "month": month_key,
-                            "days": hit_days,
-                            "days_count": len(hit_days),
-                            "reason": "month_index_hit",
-                        },
-                    )
-                continue
+        ordered_months = list(windows_by_month.keys())
+        self._emit(
+            task,
+            {
+                "type": "dataset_check_started",
+                "dataset": dataset,
+                "total_days": total_days_to_check,
+                "months": len(ordered_months),
+            },
+        )
 
-            if day_key in day_index:
-                self._emit(
-                    task,
-                    {
-                        "type": "dataset_day_skipped",
-                        "dataset": dataset,
-                        "day": day_key,
-                        "day_start_ms": day_start_ms,
-                        "day_end_ms": day_end_ms,
-                        "total_minutes": day_total_minutes,
-                        "reason": "day_index_hit",
-                    },
-                )
-                continue
-
-            self._emit(
-                task,
-                {
-                    "type": "dataset_day_checking",
-                    "dataset": dataset,
-                    "day": day_key,
-                    "day_start_ms": day_start_ms,
-                    "day_end_ms": day_end_ms,
-                    "total_minutes": day_total_minutes,
-                },
-            )
-
-            if is_local_day_continuous(
-                output_root=output,
-                instrument_id=instrument_id,
-                dataset_path=dataset_path,
-                day_start_ms=day_start_ms,
-                day_end_ms=day_end_ms,
-                bar=bar,
-            ):
-                if day_key not in day_index:
-                    day_index.add(day_key)
-                    index_dirty = True
-                    self._emit(
-                        task,
-                        {
-                            "type": "dataset_day_index_added",
-                            "dataset": dataset,
-                            "day": day_key,
-                            "source": "continuity_check",
-                        },
-                    )
-                    month_index = self._update_month_index(
-                        task=task,
-                        dataset=dataset,
-                        day_index=day_index,
-                        month_index=month_index,
-                        source="continuity_check",
-                    )
-
-                self._emit(
-                    task,
-                    {
-                        "type": "dataset_day_skipped",
-                        "dataset": dataset,
-                        "day": day_key,
-                        "day_start_ms": day_start_ms,
-                        "day_end_ms": day_end_ms,
-                        "total_minutes": day_total_minutes,
-                        "reason": "local_data_continuous",
-                    },
-                )
-                continue
-
-            pending_by_month[month_key].append(
-                {
-                    "day_key": day_key,
-                    "day_start_ms": day_start_ms,
-                    "day_end_ms": day_end_ms,
-                    "day_total_minutes": day_total_minutes,
-                }
-            )
-
-        pending_month_keys = sorted(pending_by_month.keys(), reverse=True)
-        if request_month_count > 1 and len(pending_month_keys) > 1:
-            workers = min(5, len(pending_month_keys))
+        parallel_workers = (
+            min(download_workers, len(ordered_months))
+            if request_month_count > 1 and len(ordered_months) > 1
+            else 1
+        )
+        if parallel_workers > 1:
             self._emit(
                 task,
                 {
                     "type": "dataset_parallel_started",
                     "dataset": dataset,
-                    "months": len(pending_month_keys),
-                    "workers": workers,
+                    "months": len(ordered_months),
+                    "workers": parallel_workers,
+                    "requested_workers": download_workers,
                 },
             )
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [
-                    executor.submit(
-                        self._download_month_days,
-                        task,
-                        dataset,
-                        instrument_id,
-                        bar,
-                        base_url,
-                        month_key,
-                        pending_by_month[month_key],
-                    )
-                    for month_key in pending_month_keys
-                ]
+
+        def _emit_check_progress(day: str, month: str) -> None:
+            progress_pct = round((checked_days * 100.0) / total_days_to_check, 2) if total_days_to_check > 0 else 100.0
+            self._emit(
+                task,
+                {
+                    "type": "dataset_check_progress",
+                    "dataset": dataset,
+                    "day": day,
+                    "month": month,
+                    "checked_days": checked_days,
+                    "total_days": total_days_to_check,
+                    "progress_pct": progress_pct,
+                },
+            )
+
+        if parallel_workers > 1:
+            futures: list[Any] = []
+            with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+                for month_key in ordered_months:
+                    month_pending: list[dict[str, Any]] = []
+                    month_windows = windows_by_month[month_key]
+
+                    if month_key in month_index:
+                        if month_key not in month_skip_emitted:
+                            month_skip_emitted.add(month_key)
+                            hit_days = requested_days_by_month.get(month_key, [])
+                            self._emit(
+                                task,
+                                {
+                                    "type": "dataset_month_skipped",
+                                    "dataset": dataset,
+                                    "month": month_key,
+                                    "days": hit_days,
+                                    "days_count": len(hit_days),
+                                    "reason": "month_index_hit",
+                                },
+                            )
+                        checked_days += len(month_windows)
+                        if month_windows:
+                            _emit_check_progress(day=format_day_key(month_windows[-1][0], tz_name=input_tz), month=month_key)
+                        continue
+
+                    for day_start_ms, day_end_ms in month_windows:
+                        day_key = format_day_key(day_start_ms, tz_name=input_tz)
+                        day_total_minutes = calc_total_minutes(day_start_ms, day_end_ms)
+
+                        if day_key in day_index:
+                            self._emit(
+                                task,
+                                {
+                                    "type": "dataset_day_skipped",
+                                    "dataset": dataset,
+                                    "day": day_key,
+                                    "day_start_ms": day_start_ms,
+                                    "day_end_ms": day_end_ms,
+                                    "total_minutes": day_total_minutes,
+                                    "reason": "day_index_hit",
+                                },
+                            )
+                            checked_days += 1
+                            _emit_check_progress(day=day_key, month=month_key)
+                            continue
+
+                        self._emit(
+                            task,
+                            {
+                                "type": "dataset_day_checking",
+                                "dataset": dataset,
+                                "day": day_key,
+                                "day_start_ms": day_start_ms,
+                                "day_end_ms": day_end_ms,
+                                "total_minutes": day_total_minutes,
+                            },
+                        )
+
+                        if is_local_day_continuous(
+                            output_root=output,
+                            instrument_id=instrument_id,
+                            dataset_path=dataset_path,
+                            day_start_ms=day_start_ms,
+                            day_end_ms=day_end_ms,
+                            bar=bar,
+                        ):
+                            if day_key not in day_index:
+                                day_index.add(day_key)
+                                index_dirty = True
+                                self._emit(
+                                    task,
+                                    {
+                                        "type": "dataset_day_index_added",
+                                        "dataset": dataset,
+                                        "day": day_key,
+                                        "source": "continuity_check",
+                                    },
+                                )
+                                month_index = self._update_month_index(
+                                    task=task,
+                                    dataset=dataset,
+                                    day_index=day_index,
+                                    month_index=month_index,
+                                    source="continuity_check",
+                                )
+
+                            self._emit(
+                                task,
+                                {
+                                    "type": "dataset_day_skipped",
+                                    "dataset": dataset,
+                                    "day": day_key,
+                                    "day_start_ms": day_start_ms,
+                                    "day_end_ms": day_end_ms,
+                                    "total_minutes": day_total_minutes,
+                                    "reason": "local_data_continuous",
+                                },
+                            )
+                            checked_days += 1
+                            _emit_check_progress(day=day_key, month=month_key)
+                            continue
+
+                        month_pending.append(
+                            {
+                                "day_key": day_key,
+                                "day_start_ms": day_start_ms,
+                                "day_end_ms": day_end_ms,
+                                "day_total_minutes": day_total_minutes,
+                            }
+                        )
+                        checked_days += 1
+                        _emit_check_progress(day=day_key, month=month_key)
+
+                    if month_pending:
+                        futures.append(
+                            executor.submit(
+                                self._download_month_days,
+                                task,
+                                dataset,
+                                instrument_id,
+                                bar,
+                                base_url,
+                                month_key,
+                                month_pending,
+                            )
+                        )
+
                 for future in as_completed(futures):
                     for plan, day_rows in future.result():
                         rows_written_total, min_ts, max_ts, index_dirty, month_index = self._process_downloaded_day(
@@ -411,33 +464,154 @@ class DownloadService:
                         )
         else:
             worker_client = self.client_factory(base_url)
-            for month_key in pending_month_keys:
-                for plan in pending_by_month[month_key]:
-                    day_rows = self._collect_day_rows(
-                        task=task,
-                        client=worker_client,
-                        dataset=dataset,
-                        instrument_id=instrument_id,
-                        bar=bar,
-                        plan=plan,
+            for month_key in ordered_months:
+                month_pending: list[dict[str, Any]] = []
+                month_windows = windows_by_month[month_key]
+                if month_key in month_index:
+                    if month_key not in month_skip_emitted:
+                        month_skip_emitted.add(month_key)
+                        hit_days = requested_days_by_month.get(month_key, [])
+                        self._emit(
+                            task,
+                            {
+                                "type": "dataset_month_skipped",
+                                "dataset": dataset,
+                                "month": month_key,
+                                "days": hit_days,
+                                "days_count": len(hit_days),
+                                "reason": "month_index_hit",
+                            },
+                        )
+                    checked_days += len(month_windows)
+                    if month_windows:
+                        _emit_check_progress(day=format_day_key(month_windows[-1][0], tz_name=input_tz), month=month_key)
+                    continue
+
+                for day_start_ms, day_end_ms in month_windows:
+                    day_key = format_day_key(day_start_ms, tz_name=input_tz)
+                    day_total_minutes = calc_total_minutes(day_start_ms, day_end_ms)
+
+                    if day_key in day_index:
+                        self._emit(
+                            task,
+                            {
+                                "type": "dataset_day_skipped",
+                                "dataset": dataset,
+                                "day": day_key,
+                                "day_start_ms": day_start_ms,
+                                "day_end_ms": day_end_ms,
+                                "total_minutes": day_total_minutes,
+                                "reason": "day_index_hit",
+                            },
+                        )
+                        checked_days += 1
+                        _emit_check_progress(day=day_key, month=month_key)
+                        continue
+
+                    self._emit(
+                        task,
+                        {
+                            "type": "dataset_day_checking",
+                            "dataset": dataset,
+                            "day": day_key,
+                            "day_start_ms": day_start_ms,
+                            "day_end_ms": day_end_ms,
+                            "total_minutes": day_total_minutes,
+                        },
                     )
-                    rows_written_total, min_ts, max_ts, index_dirty, month_index = self._process_downloaded_day(
-                        task=task,
-                        storage=storage,
-                        dataset=dataset,
+
+                    if is_local_day_continuous(
+                        output_root=output,
+                        instrument_id=instrument_id,
                         dataset_path=dataset_path,
-                        instrument_id=instrument_id,
+                        day_start_ms=day_start_ms,
+                        day_end_ms=day_end_ms,
                         bar=bar,
-                        output=output,
-                        plan=plan,
-                        day_rows=day_rows,
-                        day_index=day_index,
-                        month_index=month_index,
-                        rows_written_total=rows_written_total,
-                        min_ts=min_ts,
-                        max_ts=max_ts,
-                        index_dirty=index_dirty,
+                    ):
+                        if day_key not in day_index:
+                            day_index.add(day_key)
+                            index_dirty = True
+                            self._emit(
+                                task,
+                                {
+                                    "type": "dataset_day_index_added",
+                                    "dataset": dataset,
+                                    "day": day_key,
+                                    "source": "continuity_check",
+                                },
+                            )
+                            month_index = self._update_month_index(
+                                task=task,
+                                dataset=dataset,
+                                day_index=day_index,
+                                month_index=month_index,
+                                source="continuity_check",
+                            )
+
+                        self._emit(
+                            task,
+                            {
+                                "type": "dataset_day_skipped",
+                                "dataset": dataset,
+                                "day": day_key,
+                                "day_start_ms": day_start_ms,
+                                "day_end_ms": day_end_ms,
+                                "total_minutes": day_total_minutes,
+                                "reason": "local_data_continuous",
+                            },
+                        )
+                        checked_days += 1
+                        _emit_check_progress(day=day_key, month=month_key)
+                        continue
+
+                    month_pending.append(
+                        {
+                            "day_key": day_key,
+                            "day_start_ms": day_start_ms,
+                            "day_end_ms": day_end_ms,
+                            "day_total_minutes": day_total_minutes,
+                        }
                     )
+                    checked_days += 1
+                    _emit_check_progress(day=day_key, month=month_key)
+
+                if month_pending:
+                    for plan in month_pending:
+                        day_rows = self._collect_day_rows(
+                            task=task,
+                            client=worker_client,
+                            dataset=dataset,
+                            instrument_id=instrument_id,
+                            bar=bar,
+                            plan=plan,
+                        )
+                        rows_written_total, min_ts, max_ts, index_dirty, month_index = self._process_downloaded_day(
+                            task=task,
+                            storage=storage,
+                            dataset=dataset,
+                            dataset_path=dataset_path,
+                            instrument_id=instrument_id,
+                            bar=bar,
+                            output=output,
+                            plan=plan,
+                            day_rows=day_rows,
+                            day_index=day_index,
+                            month_index=month_index,
+                            rows_written_total=rows_written_total,
+                            min_ts=min_ts,
+                            max_ts=max_ts,
+                            index_dirty=index_dirty,
+                        )
+
+        self._emit(
+            task,
+            {
+                "type": "dataset_check_finished",
+                "dataset": dataset,
+                "checked_days": checked_days,
+                "total_days": total_days_to_check,
+            },
+        )
 
         if index_dirty:
             updated_months = persist_day_and_month_indexes(
@@ -731,6 +905,15 @@ class DownloadService:
         with self._lock:
             task.status = status
             task.updated_at = time.time()
+
+    @staticmethod
+    def _normalize_download_workers(raw_value: Any) -> int:
+        default_workers = 5
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return default_workers
+        return max(1, min(value, 64))
 
     def _emit(self, task: DownloadTask, payload: dict[str, Any]) -> None:
         event = json.dumps(payload, ensure_ascii=True)
