@@ -1,8 +1,8 @@
 {
   "dataset": "index_candles",
-  "rows_in_batch": 2880,
-  "min_ts": 1776988800000,
-  "max_ts": 1777161540000,
-  "min_iso_time": "2026-04-24T00:00:00Z",
-  "max_iso_time": "2026-04-25T23:59:00Z"
+  "rows_in_batch": 1440,
+  "min_ts": 1777334400000,
+  "max_ts": 1777420740000,
+  "min_iso_time": "2026-04-28T00:00:00Z",
+  "max_iso_time": "2026-04-28T23:59:00Z"
 }
