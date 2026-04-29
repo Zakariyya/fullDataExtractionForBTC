@@ -27,7 +27,8 @@ env/
 .codex
 *.log
 
-# Runtime temp files (keep data/ tracked by design)
+# Runtime temp files and local datasets
+data/
 /tmp/
 tmp/
 *.tmp
